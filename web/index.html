@@ -6,68 +6,155 @@
 <style>
 body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;background:#0f141b;color:#dbe4ee}
 h1{font-size:20px}h2{font-size:16px;margin-top:28px}
-button{background:#2b6cb0;color:#fff;border:0;border-radius:6px;padding:8px 16px;margin-right:8px;cursor:pointer}
-button:disabled{opacity:.5}button.warn{background:#975a16}
+button{background:#2b6cb0;color:#fff;border:0;border-radius:6px;padding:8px 16px;margin:4px 8px 4px 0;cursor:pointer}
+button:disabled{opacity:.5}button.warn{background:#975a16}button.danger{background:#9b2c2c}
 table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
 th,td{border:1px solid #2d3748;padding:6px 8px;text-align:left;vertical-align:top}
 th{background:#1a202c}.mono{font-family:Consolas,monospace;font-size:12px;word-break:break-all}
-#log{background:#000;border-radius:8px;padding:12px;height:320px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-input{background:#1a202c;border:1px solid #2d3748;color:#dbe4ee;border-radius:6px;padding:7px 10px}
+#log{background:#000;border-radius:8px;padding:12px;height:300px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+input[type=text],input[type=password],input[type=number]{background:#1a202c;border:1px solid #2d3748;color:#dbe4ee;border-radius:6px;padding:7px 10px}
+input.wide{width:420px}input.num{width:90px}
+label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
+.card{background:#161d27;border:1px solid #2d3748;border-radius:8px;padding:12px;margin-top:8px}
 .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px}
 .ok{background:#22543d}.bad{background:#742a2a}.idle{background:#2d3748}
+.listitem{display:flex;gap:8px;align-items:center;margin:4px 0}
+.note{font-size:12px;color:#9aa7b8}
 </style></head>
 <body>
 <h1>MAA Fleet Updater</h1>
 <div class="row">
-<label>Token <input id="token" type="password" size="20" placeholder="auth token" /></label>
+<label>Token <input id="token" type="password" size="20" /></label>
 <button onclick="saveToken()">保存 Token</button>
 <span id="health" class="pill idle">?</span>
+<span id="cfgwarn" class="note"></span>
 </div>
 <h2>实例</h2>
-<div class="row"><button onclick="api('/api/instances','GET',renderInstances)">刷新实例</button>
-<button onclick="api('/api/plan','GET',renderPlan)">查看计划</button></div>
+<div class="row"><button onclick="loadInstances()">刷新实例</button>
+<button onclick="loadPlan()">查看计划</button></div>
 <table><thead><tr><th>目录</th><th>版本</th><th>通道</th><th>资源时间</th><th>运行</th><th>待装包</th></tr></thead>
 <tbody id="instances"></tbody></table>
-<h2>流水线</h2>
+<h2>流水线（准备可联网，提交零网络）</h2>
 <div class="row">
 <button onclick="runPrepare(false)">准备（OTA 优先）</button>
 <button class="warn" onclick="runPrepare(true)">准备（强制完整包）</button>
-<button onclick="api('/api/commit','POST')">提交+拉起（开机阶段）</button>
-<button onclick="api('/api/launch','POST')">仅拉起</button>
+<button onclick="post('/api/commit')">提交+拉起（开机阶段）</button>
+<button onclick="post('/api/launch')">仅拉起</button>
 </div>
-<p>准备阶段联网（查版本/下载/GitHub 直链走代理）；提交阶段零网络请求；拉起是最后一步，失败也不阻塞。</p>
+<h2>配置（保存即生效，换监听地址需重启）</h2>
+<div class="card">
+<div class="row"><label>搜索根目录（多个 MAA 路径都加进来）</label></div>
+<div id="roots"></div>
+<div class="row"><input id="newroot" class="wide" type="text" placeholder="如 D:/MAA-SSD" /><button onclick="addRoot()">添加</button></div>
+<div class="row"><label>搜索深度 <input id="f_max_depth" class="num" type="number" min="1" max="12" /></label>
+<label>拉起间隔秒 <input id="f_stagger" class="num" type="number" min="0" max="300" /></label>
+<label>自动准备小时 <input id="f_autoprep" class="num" type="number" min="0" max="168" /></label></div>
+<div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" /></label></div>
+<div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" /></label>
+<label>分支 <input id="f_branch" type="text" size="10" /></label></div>
+<div class="row"><label>代理（空=直连） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" /></label></div>
+<div class="row"><label>监听地址 <input id="f_bind" type="text" /></label>
+<label>Token <input id="f_token" type="text" /></label></div>
+<div class="row"><label>API 基地址列表</label></div>
+<div id="apis"></div>
+<div class="row"><input id="newapi" class="wide" type="text" placeholder="https://..." /><button onclick="addApi()">添加</button></div>
+<div class="row">
+<label><input id="f_commit" type="checkbox" /> 开机自动提交+拉起</label>
+<label><input id="f_takeover" type="checkbox" /> 接管实例开机自启</label>
+</div>
+<div class="row"><button onclick="saveConfig()">保存配置</button><span id="savemsg" class="note"></span></div>
+</div>
+<h2>本程序开机自启（计划任务）</h2>
+<div class="card"><div class="row">
+<button onclick="loadAutostart()">查询状态</button>
+<button onclick="autostart('enable')">注册开机自启</button>
+<button class="danger" onclick="autostart('disable')">取消开机自启</button>
+<span id="asstat" class="pill idle">?</span></div>
+<div id="asdetail" class="mono note"></div></div>
 <h2>日志</h2>
 <div id="log"></div>
 <script>
-let TOKEN = localStorage.getItem('fleet_token') || '';
-document.getElementById('token').value = TOKEN;
-function saveToken(){ TOKEN = document.getElementById('token').value; localStorage.setItem('fleet_token', TOKEN); connect(); }
-function hdr(){ return TOKEN ? {'x-token': TOKEN} : {}; }
-function log(t){ const el=document.getElementById('log'); el.textContent += t + '\n'; el.scrollTop = el.scrollHeight; }
-async function api(path, method, cb){
+let TOKEN = localStorage.getItem("fleet_token") || "";
+document.getElementById("token").value = TOKEN;
+let CFG = null;
+function saveToken(){ TOKEN = document.getElementById("token").value; localStorage.setItem("fleet_token", TOKEN); connect(); }
+function hdr(){ const h = {"content-type":"application/json"}; if (TOKEN) h["x-token"] = TOKEN; return h; }
+function log(t){ const el=document.getElementById("log"); el.textContent += t + "\n"; el.scrollTop = el.scrollHeight; }
+async function api(path, method, body, cb){
   try {
-    const r = await fetch(path, {method, headers: Object.assign({'content-type':'application/json'}, hdr())});
+    const r = await fetch(path, {method: method, headers: hdr(), body: body ? JSON.stringify(body) : undefined});
     const t = await r.text();
-    if(!r.ok){ log('HTTP '+r.status+' '+t); return; }
+    if(!r.ok){ log("HTTP "+r.status+" "+t); return null; }
     if(cb){ try{ cb(JSON.parse(t)); }catch(e){ log(t); } }
-    else log(t);
-  } catch(e){ log('ERR '+e); }
+    return t;
+  } catch(e){ log("ERR "+e); return null; }
 }
-function pill(ok, txt){ return '<span class="pill '+(ok?'ok':'bad')+'">'+txt+'</span>'; }
-function renderInstances(list){
-  const tb = document.getElementById('instances');
-  tb.innerHTML = list.map(i => '<tr><td class="mono">'+i.dir+'</td><td class="mono">'+i.exe_version_raw+'</td><td>'+i.channel+'</td><td class="mono">'+(i.resource_time||'-')+'</td><td>'+(i.running?pill(true,'运行中'):pill(false,' stopped'))+'</td><td class="mono">'+(i.pending_package||'-')+'</td></tr>').join('');
+function post(p){ api(p, "POST", null, function(t){ log(t); }); }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function pill(ok, txt){ return "<span class=\"pill "+(ok?"ok":"bad")+"\">"+esc(txt)+"</span>"; }
+function loadInstances(){ api("/api/instances", "GET", null, function(list){
+  document.getElementById("instances").innerHTML = list.map(function(i){
+    return "<tr><td class=\"mono\">"+esc(i.dir)+"</td><td class=\"mono\">"+esc(i.exe_version_raw)+"</td><td>"+esc(i.channel)+"</td><td class=\"mono\">"+esc(i.resource_time||"-")+"</td><td>"+(i.running?pill(true,"运行中"):pill(false,"stopped"))+"</td><td class=\"mono\">"+esc(i.pending_package||"-")+"</td></tr>";
+  }).join("");
+}); }
+function loadPlan(){ api("/api/plan", "GET", null, function(p){ log("plan: " + JSON.stringify(p, null, 1)); }); }
+function runPrepare(force){ api("/api/prepare", "POST", {force_full: force}, function(t){ log(t); }); }
+function renderList(el, items, del){
+  document.getElementById(el).innerHTML = items.map(function(v, i){
+    return "<div class=\"listitem\"><span class=\"mono\">"+esc(v)+"</span><button onclick=\""+del+"("+i+")\">删除</button></div>";
+  }).join("");
 }
-function renderPlan(p){ log('plan: ' + JSON.stringify(p, null, 1)); }
-async function runPrepare(force){
-  await fetch('/api/prepare', {method:'POST', headers: Object.assign({'content-type':'application/json'}, hdr()), body: JSON.stringify({force_full: force})});
+function delRoot(i){ CFG.search_roots.splice(i,1); renderList("roots", CFG.search_roots, "delRoot"); }
+function addRoot(){ const v=document.getElementById("newroot").value.trim(); if(!v) return; CFG.search_roots.push(v); document.getElementById("newroot").value=""; renderList("roots", CFG.search_roots, "delRoot"); }
+function delApi(i){ CFG.maa_api_bases.splice(i,1); renderList("apis", CFG.maa_api_bases, "delApi"); }
+function addApi(){ const v=document.getElementById("newapi").value.trim(); if(!v) return; CFG.maa_api_bases.push(v); document.getElementById("newapi").value=""; renderList("apis", CFG.maa_api_bases, "delApi"); }
+function loadConfig(){ api("/api/config", "GET", null, function(c){
+  CFG = c;
+  document.getElementById("f_max_depth").value = c.max_depth;
+  document.getElementById("f_stagger").value = c.launch_stagger_secs;
+  document.getElementById("f_autoprep").value = c.auto_prepare_hours;
+  document.getElementById("f_staging").value = c.staging_dir;
+  document.getElementById("f_repo").value = c.resource_repo;
+  document.getElementById("f_branch").value = c.resource_branch;
+  document.getElementById("f_proxy").value = c.proxy;
+  document.getElementById("f_bind").value = c.web_bind;
+  document.getElementById("f_token").value = c.auth_token;
+  document.getElementById("f_commit").checked = c.commit_on_startup;
+  document.getElementById("f_takeover").checked = c.takeover_autostart;
+  renderList("roots", c.search_roots, "delRoot");
+  renderList("apis", c.maa_api_bases, "delApi");
+}); }
+function saveConfig(){
+  CFG.max_depth = parseInt(document.getElementById("f_max_depth").value, 10);
+  CFG.launch_stagger_secs = parseInt(document.getElementById("f_stagger").value, 10);
+  CFG.auto_prepare_hours = parseInt(document.getElementById("f_autoprep").value, 10);
+  CFG.staging_dir = document.getElementById("f_staging").value;
+  CFG.resource_repo = document.getElementById("f_repo").value;
+  CFG.resource_branch = document.getElementById("f_branch").value;
+  CFG.proxy = document.getElementById("f_proxy").value;
+  CFG.web_bind = document.getElementById("f_bind").value;
+  CFG.auth_token = document.getElementById("f_token").value;
+  CFG.commit_on_startup = document.getElementById("f_commit").checked;
+  CFG.takeover_autostart = document.getElementById("f_takeover").checked;
+  api("/api/config", "POST", CFG, function(r){
+    const o = JSON.parse(r);
+    document.getElementById("savemsg").textContent = o.restart_needed ? "已保存，监听地址变了，需重启本程序" : "已保存，即时生效";
+    if (o.restart_needed) { document.getElementById("cfgwarn").textContent = "监听地址已改，重启后生效"; }
+  });
 }
+function loadAutostart(){ api("/api/autostart", "GET", null, function(s){
+  const el = document.getElementById("asstat");
+  el.textContent = s.registered ? "已注册" : "未注册";
+  el.className = "pill " + (s.registered ? "ok" : "idle");
+  document.getElementById("asdetail").textContent = s.detail || "";
+}); }
+function autostart(a){ api("/api/autostart", "POST", {action: a}, function(){ loadAutostart(); }); }
 function connect(){
-  fetch('/api/health').then(r=>r.text()).then(t=>{ document.getElementById('health').textContent=t; document.getElementById('health').className='pill ok'; }).catch(()=>{ document.getElementById('health').textContent='offline'; });
-  const es = new EventSource('/events?token='+encodeURIComponent(TOKEN));
-  es.onmessage = e => { try{ const o=JSON.parse(e.data); log('['+o.level+'] '+o.msg); }catch(_){ log(e.data); } };
+  fetch("/api/health").then(function(r){ return r.text(); }).then(function(t){ document.getElementById("health").textContent=t; document.getElementById("health").className="pill ok"; }).catch(function(){ document.getElementById("health").textContent="offline"; });
+  const es = new EventSource("/events?token="+encodeURIComponent(TOKEN));
+  es.onmessage = function(e){ try{ const o=JSON.parse(e.data); log("["+o.level+"] "+o.msg); }catch(_){ log(e.data); } };
 }
-connect(); api('/api/instances','GET',renderInstances);
+connect(); loadInstances(); loadConfig(); loadAutostart();
 </script>
 </body></html>

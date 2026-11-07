@@ -1,3 +1,4 @@
+mod autostart;
 mod config;
 mod discover;
 mod downloader;
@@ -33,6 +34,7 @@ struct AppState {
 }
 
 struct Inner {
+    cfg_path: PathBuf,
     cfg: RwLock<config::Config>,
     prepare_lock: tokio::sync::Mutex<()>,
     tx: broadcast::Sender<String>,
@@ -57,6 +59,66 @@ async fn plan(State(state): State<AppState>) -> impl IntoResponse {
     let cfg = state.inner.cfg.read().await.clone();
     let p = load_plan(&cfg);
     Json(p)
+}
+
+async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
+    let cfg = state.inner.cfg.read().await.clone();
+    Json(cfg)
+}
+
+async fn save_config(
+    State(state): State<AppState>,
+    Json(new_cfg): Json<config::Config>,
+) -> impl IntoResponse {
+    if let Err(e) = new_cfg.validate() {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    let path = state.inner.cfg_path.clone();
+    if let Err(e) = new_cfg.save_to(&path) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    }
+    let restart = state.inner.cfg.read().await.web_bind != new_cfg.web_bind;
+    *state.inner.cfg.write().await = new_cfg;
+    Json(serde_json::json!({"saved": true, "restart_needed": restart})).into_response()
+}
+
+async fn autostart_status() -> impl IntoResponse {
+    let (registered, detail) = tokio::task::spawn_blocking(autostart::status)
+        .await
+        .unwrap_or((false, String::new()));
+    Json(
+        serde_json::json!({"registered": registered, "detail": detail, "task": autostart::TASK_NAME}),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct AutostartBody {
+    action: String,
+}
+
+async fn autostart_action(
+    State(state): State<AppState>,
+    Json(body): Json<AutostartBody>,
+) -> impl IntoResponse {
+    let cfg_path = state.inner.cfg_path.clone();
+    let out = tokio::task::spawn_blocking(move || match body.action.as_str() {
+        "enable" => {
+            let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+            autostart::enable(&exe, &cfg_path)
+        }
+        "disable" => autostart::disable(),
+        other => Err(format!("unknown action: {other}")),
+    })
+    .await;
+    match out {
+        Ok(Ok(msg)) => Json(serde_json::json!({"ok": true, "msg": msg})).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task failed: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -424,13 +486,15 @@ async fn main() {
         )
         .init();
     let (cfg_path, commit_once) = parse_args();
-    let cfg = config::Config::load(&cfg_path).unwrap_or_else(|e| {
-        eprintln!("config error: {e} (see config.example.json)");
-        std::process::exit(2);
-    });
+    let cfg_path = std::fs::canonicalize(&cfg_path).unwrap_or(cfg_path);
+    let (cfg, cfg_note) = config::Config::load_or_create(&cfg_path);
     let (tx, _rx) = state::event_bus();
+    if let Some(note) = cfg_note {
+        tracing::warn!("{note}");
+    }
     let state = AppState {
         inner: Arc::new(Inner {
+            cfg_path: cfg_path.clone(),
             cfg: RwLock::new(cfg),
             prepare_lock: tokio::sync::Mutex::new(()),
             tx,
@@ -446,14 +510,15 @@ async fn main() {
     {
         let s = state.clone();
         tokio::spawn(async move {
-            let hours = s.inner.cfg.read().await.auto_prepare_hours;
-            if hours == 0 {
-                return;
-            }
             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
             loop {
-                run_prepare(&s, false).await;
-                tokio::time::sleep(std::time::Duration::from_secs(hours * 3600)).await;
+                let hours = s.inner.cfg.read().await.auto_prepare_hours;
+                if hours > 0 {
+                    run_prepare(&s, false).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(hours * 3600)).await;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                }
             }
         });
     }
@@ -466,6 +531,11 @@ async fn main() {
         .route("/api/prepare", post(prepare))
         .route("/api/commit", post(commit))
         .route("/api/launch", post(launch))
+        .route("/api/config", get(get_config).post(save_config))
+        .route(
+            "/api/autostart",
+            get(autostart_status).post(autostart_action),
+        )
         .route("/events", get(events))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state);
