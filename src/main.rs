@@ -569,8 +569,21 @@ fn read_json_opt(path: std::path::PathBuf) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
+fn default_config_path() -> PathBuf {
+    // Primary use is double-clicking the exe: keep config next to it,
+    // independent of the process working directory.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if !dir.as_os_str().is_empty() {
+                return dir.join("config.json");
+            }
+        }
+    }
+    PathBuf::from("config.json")
+}
+
 fn parse_args() -> (PathBuf, bool) {
-    let mut cfg = PathBuf::from("config.json");
+    let mut cfg = default_config_path();
     let mut once = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -582,7 +595,33 @@ fn parse_args() -> (PathBuf, bool) {
             once = true;
         }
     }
+    anchor_to_exe_dir(&mut cfg);
     (cfg, once)
+}
+
+/// Every relative path anchors to the executable directory, never CWD.
+fn anchor_to_exe_dir(cfg: &mut PathBuf) {
+    if cfg.is_relative() {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                if !dir.as_os_str().is_empty() {
+                    *cfg = dir.join(&*cfg);
+                }
+            }
+        }
+    }
+}
+
+/// First double-click experience: no config existed, so show the user where
+/// to continue (WebUI in the default browser). Best effort only.
+fn open_browser_once(bind: &str) {
+    let url = format!("http://{bind}");
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 #[tokio::main]
@@ -597,6 +636,9 @@ async fn main() {
     let cfg_path = std::fs::canonicalize(&cfg_path).unwrap_or(cfg_path);
     let (cfg, cfg_note) = config::Config::load_or_create(&cfg_path);
     let (tx, _rx) = state::event_bus();
+    // Fresh defaults were just written (missing or corrupt config):
+    // this is effectively a first run, open the WebUI for the user.
+    let first_run = cfg_note.is_some();
     if let Some(note) = cfg_note {
         tracing::warn!("{note}");
     }
@@ -661,5 +703,8 @@ async fn main() {
             std::process::exit(2);
         });
     tracing::info!("listening on {bind}");
+    if first_run && !commit_once {
+        open_browser_once(&bind);
+    }
     axum::serve(listener, app).await.unwrap();
 }
