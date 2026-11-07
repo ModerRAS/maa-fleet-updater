@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Build
+        run: cargo build
+      - name: Smoke test with fixture instance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fix = "$env:GITHUB_WORKSPACE/.ci-fixture/inst1"
+          New-Item -ItemType Directory -Force "$fix/resource" | Out-Null
+          Copy-Item target/debug/maa-fleet-updater.exe "$fix/MAA.exe"
+          @{ last_updated = "2025-01-01 00:00:00.000" } | ConvertTo-Json | Set-Content "$fix/resource/version.json" -Encoding utf8NoBOM
+          @{ search_roots = @(".ci-fixture"); max_depth = 4; staging_dir = ".ci-staging"; commit_on_startup = $false; takeover_autostart = $false; web_bind = "127.0.0.1:38099"; auto_prepare_hours = 0 } | ConvertTo-Json | Set-Content .ci-config.json -Encoding utf8NoBOM
+          $p = Start-Process -FilePath target/debug/maa-fleet-updater.exe -ArgumentList "--config", ".ci-config.json" -PassThru
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              try { if ((Invoke-RestMethod "http://127.0.0.1:38099/api/health") -eq "ok") { $ok = $true; break } } catch {}
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ok) { throw "daemon did not become healthy" }
+            $inst = Invoke-RestMethod "http://127.0.0.1:38099/api/instances"
+            if ($inst.Count -ne 1) { throw "expected 1 instance" }
+            Write-Host "smoke ok"
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }

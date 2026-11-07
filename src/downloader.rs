@@ -23,13 +23,17 @@ pub async fn download_first(
     mut on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| format!("mkdir: {e}"))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("mkdir: {e}"))?;
     }
     let mut last_err = String::from("no urls");
     for url in urls {
         match try_one(client, url, dest, &mut on_progress).await {
             Ok(()) => return Ok(()),
-            Err(e) => { last_err = format!("{url}: {e}"); }
+            Err(e) => {
+                last_err = format!("{url}: {e}");
+            }
         }
     }
     Err(last_err)
@@ -41,12 +45,20 @@ async fn try_one(
     dest: &Path,
     on_progress: &mut impl FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
-    let resp = client.get(url).send().await.map_err(|e| format!("request: {e}"))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("request: {e}"))?;
     let status = resp.status();
-    if !status.is_success() { return Err(format!("HTTP {status}")); }
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
+    }
     let total = resp.content_length();
     let tmp = dest.with_extension("part");
-    let mut f = tokio::fs::File::create(&tmp).await.map_err(|e| format!("create file: {e}"))?;
+    let mut f = tokio::fs::File::create(&tmp)
+        .await
+        .map_err(|e| format!("create file: {e}"))?;
     let mut done: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -57,6 +69,8 @@ async fn try_one(
     }
     f.flush().await.map_err(|e| format!("flush: {e}"))?;
     drop(f);
-    tokio::fs::rename(&tmp, dest).await.map_err(|e| format!("rename: {e}"))?;
+    tokio::fs::rename(&tmp, dest)
+        .await
+        .map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }

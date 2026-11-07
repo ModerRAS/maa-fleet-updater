@@ -1,23 +1,39 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-fn default_search_roots() -> Vec<PathBuf> { vec![PathBuf::from("D:/MAA")] }
-fn default_max_depth() -> usize { 4 }
-fn default_staging() -> PathBuf { PathBuf::from("./staging") }
+fn default_search_roots() -> Vec<PathBuf> {
+    vec![PathBuf::from("D:/MAA")]
+}
+fn default_max_depth() -> usize {
+    4
+}
+fn default_staging() -> PathBuf {
+    PathBuf::from("./staging")
+}
 fn default_resource_repo() -> String {
     "https://github.com/MaaAssistantArknights/MaaResource".to_string()
 }
-fn default_branch() -> String { "main".to_string() }
+fn default_branch() -> String {
+    "main".to_string()
+}
 fn default_api_bases() -> Vec<String> {
     vec![
         "https://api.maa.plus/MaaAssistantArknights/api/".to_string(),
         "https://api2.maa.plus/MaaAssistantArknights/api/".to_string(),
     ]
 }
-fn default_true() -> bool { true }
-fn default_bind() -> String { "127.0.0.1:38080".to_string() }
-fn default_stagger() -> u64 { 5 }
-fn default_prepare_hours() -> u64 { 6 }
+fn default_true() -> bool {
+    true
+}
+fn default_bind() -> String {
+    "127.0.0.1:38080".to_string()
+}
+fn default_stagger() -> u64 {
+    5
+}
+fn default_prepare_hours() -> u64 {
+    6
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {

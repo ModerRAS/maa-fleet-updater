@@ -1,5 +1,7 @@
 # maa-fleet-updater
 
+![CI](https://github.com/ModerRAS/maa-fleet-updater/actions/workflows/ci.yml/badge.svg)
+
 Multi-instance MaaAssistantArknights fleet updater and unified launcher.
 Rust daemon with an embedded WebUI. Chinese docs below.
 
@@ -88,6 +90,11 @@ MAA.Updater.exe 完成安装，和手动点更新是同一条代码路径。
 可用，但以下场景只在替身实例上验证过，真机首次使用建议手动确认：
 live 版本检查与大包下载、中央仓库首次克隆、真机重启后的 Updater 接管。
 Debug/本地构建版本（version 读不出）会被跳过应用更新，只同步资源。
+
+## Releases
+
+Push a tag like v0.1.0 and the release workflow builds the Windows x64
+binary and attaches maa-fleet-updater-win-x64.zip to the GitHub release.
 
 ## License
 

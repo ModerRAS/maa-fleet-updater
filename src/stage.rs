@@ -27,28 +27,61 @@ pub struct LaunchReport {
 pub fn commit_all(cfg: &Config, plan: &Plan, tx: &broadcast::Sender<String>) -> Vec<CommitReport> {
     emit(tx, "info", "commit start (local files only, no network)");
     let instances = crate::discover::scan(cfg);
-    emit(tx, "info", format!("discovered {} instance(s)", instances.len()));
+    emit(
+        tx,
+        "info",
+        format!("discovered {} instance(s)", instances.len()),
+    );
     let central_res = crate::resource::central_resource_dir(&cfg.staging_dir.join("MaaResource"));
     let central_time = crate::resource::read_last_updated(&central_res);
     let mut reports = Vec::new();
     for inst in &instances {
-        reports.push(commit_one(cfg, plan, inst, &central_res, central_time.as_deref(), tx));
+        reports.push(commit_one(
+            cfg,
+            plan,
+            inst,
+            &central_res,
+            central_time.as_deref(),
+            tx,
+        ));
     }
     if cfg.takeover_autostart {
         let exes: Vec<PathBuf> = instances.iter().map(|i| i.dir.join("MAA.exe")).collect();
-        for m in takeover_autostart(&exes) { emit(tx, "info", m); }
+        for m in takeover_autostart(&exes) {
+            emit(tx, "info", m);
+        }
     }
     let ok = reports.iter().filter(|r| r.ok).count();
-    emit(tx, "info", format!("commit done: {ok}/{} ok", reports.len()));
+    emit(
+        tx,
+        "info",
+        format!("commit done: {ok}/{} ok", reports.len()),
+    );
     reports
 }
 
 fn older(a: Option<&str>, b: &str) -> bool {
-    match a { None => true, Some(x) => x < b }
+    match a {
+        None => true,
+        Some(x) => x < b,
+    }
 }
 
-fn commit_one(cfg: &Config, plan: &Plan, inst: &InstanceInfo, central_res: &Path, central_time: Option<&str>, tx: &broadcast::Sender<String>) -> CommitReport {
-    let mut rep = CommitReport { dir: inst.dir.clone(), ok: true, resource_files: 0, app: None, note: String::new() };
+fn commit_one(
+    cfg: &Config,
+    plan: &Plan,
+    inst: &InstanceInfo,
+    central_res: &Path,
+    central_time: Option<&str>,
+    tx: &broadcast::Sender<String>,
+) -> CommitReport {
+    let mut rep = CommitReport {
+        dir: inst.dir.clone(),
+        ok: true,
+        resource_files: 0,
+        app: None,
+        note: String::new(),
+    };
     if inst.running {
         rep.ok = false;
         rep.note = "skipped: MAA.exe is running (retry next boot)".to_string();
@@ -58,27 +91,56 @@ fn commit_one(cfg: &Config, plan: &Plan, inst: &InstanceInfo, central_res: &Path
     if let Some(ct) = central_time {
         if older(inst.resource_time.as_deref(), ct) {
             match crate::resource::merge_into(central_res, &inst.dir, tx) {
-                Ok(n) => { rep.resource_files = n; }
-                Err(e) => { rep.ok = false; rep.note.push_str(&format!("resource merge failed: {e}; ")); }
+                Ok(n) => {
+                    rep.resource_files = n;
+                }
+                Err(e) => {
+                    rep.ok = false;
+                    rep.note.push_str(&format!("resource merge failed: {e}; "));
+                }
             }
         }
     }
     if let Some(item) = plan.items.iter().find(|i| i.dir == inst.dir) {
         if item.kind == "ota" || item.kind == "full" {
             match stage_app(cfg, inst, item, tx) {
-                Ok(name) => { rep.app = Some(name); }
-                Err(e) => { rep.ok = false; rep.note.push_str(&format!("app stage failed: {e}; ")); }
+                Ok(name) => {
+                    rep.app = Some(name);
+                }
+                Err(e) => {
+                    rep.ok = false;
+                    rep.note.push_str(&format!("app stage failed: {e}; "));
+                }
             }
         }
     }
-    if rep.note.is_empty() { rep.note = "ok".to_string(); }
-    emit(tx, "info", format!("{}: resource_files={} app={:?} {}", inst.dir.display(), rep.resource_files, rep.app, rep.note));
+    if rep.note.is_empty() {
+        rep.note = "ok".to_string();
+    }
+    emit(
+        tx,
+        "info",
+        format!(
+            "{}: resource_files={} app={:?} {}",
+            inst.dir.display(),
+            rep.resource_files,
+            rep.app,
+            rep.note
+        ),
+    );
     rep
 }
 
-fn stage_app(cfg: &Config, inst: &InstanceInfo, item: &PlanItem, tx: &broadcast::Sender<String>) -> Result<String, String> {
+fn stage_app(
+    cfg: &Config,
+    inst: &InstanceInfo,
+    item: &PlanItem,
+    tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
     let src = cfg.staging_dir.join("downloads").join(&item.file_name);
-    if !src.is_file() { return Err(format!("staged file missing: {}", item.file_name)); }
+    if !src.is_file() {
+        return Err(format!("staged file missing: {}", item.file_name));
+    }
     let dst = inst.dir.join(&item.file_name);
     let need_copy = match (std::fs::metadata(&src), std::fs::metadata(&dst)) {
         (Ok(a), Ok(b)) => a.len() != b.len(),
@@ -89,9 +151,22 @@ fn stage_app(cfg: &Config, inst: &InstanceInfo, item: &PlanItem, tx: &broadcast:
     }
     patch_gui(&inst.dir, &item.latest, &item.file_name)?;
     let flag = inst.dir.join("pending-update-failure.txt");
-    if flag.is_file() { let _ = std::fs::remove_file(&flag); }
-    if !dst.is_file() { return Err("verify failed: package not in place".to_string()); }
-    emit(tx, "info", format!("{}: staged {} ({})", inst.dir.display(), item.file_name, item.kind));
+    if flag.is_file() {
+        let _ = std::fs::remove_file(&flag);
+    }
+    if !dst.is_file() {
+        return Err("verify failed: package not in place".to_string());
+    }
+    emit(
+        tx,
+        "info",
+        format!(
+            "{}: staged {} ({})",
+            inst.dir.display(),
+            item.file_name,
+            item.kind
+        ),
+    );
     Ok(item.file_name.clone())
 }
 
@@ -103,15 +178,21 @@ fn patch_gui(dir: &Path, version: &str, package: &str) -> Result<(), String> {
     let raw = std::fs::read(&p).map_err(|e| format!("read gui.new.json: {e}"))?;
     let text = String::from_utf8_lossy(&raw);
     let text = crate::discover::strip_bom(&text);
-    let mut doc: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("parse gui.new.json: {e}"))?;
-    if !doc.is_object() { return Err("gui.new.json root is not an object".to_string()); }
-    if !doc["Update"].is_object() { doc["Update"] = serde_json::json!({}); }
+    let mut doc: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("parse gui.new.json: {e}"))?;
+    if !doc.is_object() {
+        return Err("gui.new.json root is not an object".to_string());
+    }
+    if !doc["Update"].is_object() {
+        doc["Update"] = serde_json::json!({});
+    }
     doc["Update"]["Name"] = serde_json::Value::String(version.to_string());
     doc["Update"]["UpdatePackage"] = serde_json::Value::String(package.to_string());
     let bak = dir.join("config").join("gui.new.json.fleetbak");
     std::fs::write(&bak, &raw).map_err(|e| format!("backup config: {e}"))?;
     let out = serde_json::to_string_pretty(&doc).map_err(|e| format!("serialize: {e}"))?;
-    serde_json::from_str::<serde_json::Value>(&out).map_err(|e| format!("round-trip check: {e}"))?;
+    serde_json::from_str::<serde_json::Value>(&out)
+        .map_err(|e| format!("round-trip check: {e}"))?;
     let tmp = dir.join("config").join("gui.new.json.fleetnew");
     std::fs::write(&tmp, out.as_bytes()).map_err(|e| format!("write tmp: {e}"))?;
     std::fs::rename(&tmp, &p).map_err(|e| format!("replace config: {e}"))?;
@@ -125,12 +206,23 @@ pub fn takeover_autostart(exes: &[PathBuf]) -> Vec<String> {
     use winreg::{enums::*, RegKey};
     let mut msgs = Vec::new();
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let run = match hkcu.open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_READ | KEY_WRITE) {
+    let run = match hkcu.open_subkey_with_flags(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        KEY_READ | KEY_WRITE,
+    ) {
         Ok(k) => k,
-        Err(e) => { msgs.push(format!("takeover: cannot open Run key: {e}")); return msgs; }
+        Err(e) => {
+            msgs.push(format!("takeover: cannot open Run key: {e}"));
+            return msgs;
+        }
     };
     let targets: Vec<String> = exes.iter().map(|p| canon_lower(p)).collect();
-    let names: Vec<String> = run.enum_values().filter_map(|r| r.ok()).map(|(n, _)| n).filter(|n| n.starts_with("MAA_")).collect();
+    let names: Vec<String> = run
+        .enum_values()
+        .filter_map(|r| r.ok())
+        .map(|(n, _)| n)
+        .filter(|n| n.starts_with("MAA_"))
+        .collect();
     for n in names {
         let v: String = run.get_value(&n).unwrap_or_default();
         let t = v.trim().trim_matches('"').to_string();
@@ -141,21 +233,32 @@ pub fn takeover_autostart(exes: &[PathBuf]) -> Vec<String> {
             }
         }
     }
-    if msgs.is_empty() { msgs.push("takeover: no MAA autostart entries".to_string()); }
+    if msgs.is_empty() {
+        msgs.push("takeover: no MAA autostart entries".to_string());
+    }
     msgs
 }
 
 fn canon_lower(p: &Path) -> String {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase()
+    std::fs::canonicalize(p)
+        .unwrap_or_else(|_| p.to_path_buf())
+        .to_string_lossy()
+        .to_lowercase()
 }
 
 fn canon_lower_str(s: &str) -> String {
-    std::fs::canonicalize(s).map(|p| p.to_string_lossy().to_lowercase().to_string()).unwrap_or_else(|_| s.to_lowercase())
+    std::fs::canonicalize(s)
+        .map(|p| p.to_string_lossy().to_lowercase().to_string())
+        .unwrap_or_else(|_| s.to_lowercase())
 }
 
 /// Launch every instance that is not already running. Never blocked by
 /// update staging results: launching MAA is the primary job.
-pub fn launch_all(cfg: &Config, dirs: &[PathBuf], tx: &broadcast::Sender<String>) -> Vec<LaunchReport> {
+pub fn launch_all(
+    cfg: &Config,
+    dirs: &[PathBuf],
+    tx: &broadcast::Sender<String>,
+) -> Vec<LaunchReport> {
     let mut out = Vec::new();
     for (i, dir) in dirs.iter().enumerate() {
         if i > 0 && cfg.launch_stagger_secs > 0 {
@@ -164,12 +267,21 @@ pub fn launch_all(cfg: &Config, dirs: &[PathBuf], tx: &broadcast::Sender<String>
         out.push(launch_one(dir, tx));
     }
     let ok = out.iter().filter(|r| r.launched).count();
-    emit(tx, "info", format!("launch done: {ok}/{} launched", out.len()));
+    emit(
+        tx,
+        "info",
+        format!("launch done: {ok}/{} launched", out.len()),
+    );
     out
 }
 
 fn launch_one(dir: &Path, tx: &broadcast::Sender<String>) -> LaunchReport {
-    let mut r = LaunchReport { dir: dir.to_path_buf(), launched: false, pid: None, note: String::new() };
+    let mut r = LaunchReport {
+        dir: dir.to_path_buf(),
+        launched: false,
+        pid: None,
+        note: String::new(),
+    };
     if crate::discover::is_running_now(dir) {
         r.note = "already running, skip".to_string();
         return r;
@@ -180,16 +292,25 @@ fn launch_one(dir: &Path, tx: &broadcast::Sender<String>) -> LaunchReport {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn() {
+        .spawn()
+    {
         Ok(child) => {
             r.launched = true;
             r.pid = Some(child.id());
             r.note = "launched".to_string();
-            emit(tx, "info", format!("{}: launched pid {:?}", dir.display(), r.pid));
+            emit(
+                tx,
+                "info",
+                format!("{}: launched pid {:?}", dir.display(), r.pid),
+            );
         }
         Err(e) => {
             r.note = format!("launch failed: {e}");
-            emit(tx, "error", format!("{}: launch failed: {e}", dir.display()));
+            emit(
+                tx,
+                "error",
+                format!("{}: launch failed: {e}", dir.display()),
+            );
         }
     }
     r

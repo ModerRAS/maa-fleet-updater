@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release
+      - name: Package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/maa-fleet-updater.exe dist/
+          Copy-Item config.example.json, README.md, LICENSE dist/
+          Compress-Archive -Path dist/* -DestinationPath maa-fleet-updater-win-x64.zip -Force
+      - name: Create GitHub release
+        run: gh release create ${{ github.ref_name }} maa-fleet-updater-win-x64.zip --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

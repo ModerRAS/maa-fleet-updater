@@ -13,10 +13,17 @@ pub fn read_maa_version(exe: &Path) -> ExeVersion {
 
 pub fn normalize(raw: &str) -> Option<semver::Version> {
     let s = raw.trim();
-    let s = s.strip_prefix('v').or_else(|| s.strip_prefix('V')).unwrap_or(s);
+    let s = s
+        .strip_prefix('v')
+        .or_else(|| s.strip_prefix('V'))
+        .unwrap_or(s);
     let s = s.split('+').next().unwrap_or(s).trim();
-    if s.is_empty() { return None; }
-    if let Ok(v) = semver::Version::parse(s) { return Some(v); }
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(v) = semver::Version::parse(s) {
+        return Some(v);
+    }
     // tolerate 4-part Windows file versions (10.0.26100.9278 -> 10.0.26100)
     let parts: Vec<&str> = s.split('.').collect();
     if parts.len() == 4 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
@@ -33,12 +40,16 @@ fn read_product_version(exe: &Path) -> Option<String> {
     let vi = rsrc.version_info().ok()?;
     for lang in vi.translation() {
         if let Some(v) = vi.value(*lang, "ProductVersion") {
-            if !v.trim().is_empty() { return Some(v); }
+            if !v.trim().is_empty() {
+                return Some(v);
+            }
         }
     }
     for lang in vi.translation() {
         if let Some(v) = vi.value(*lang, "FileVersion") {
-            if !v.trim().is_empty() { return Some(v); }
+            if !v.trim().is_empty() {
+                return Some(v);
+            }
         }
     }
     let f = vi.fixed()?;

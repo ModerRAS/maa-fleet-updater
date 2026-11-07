@@ -20,11 +20,19 @@ pub fn scan(cfg: &Config) -> Vec<InstanceInfo> {
             .follow_links(false)
             .into_iter();
         for entry in walker.filter_map(|e| e.ok()) {
-            if !entry.file_type().is_dir() { continue; }
+            if !entry.file_type().is_dir() {
+                continue;
+            }
             let dir = entry.path();
-            if !dir.join("MAA.exe").is_file() { continue; }
-            if !dir.join("resource").join("version.json").is_file() { continue; }
-            if !seen.insert(canon(dir)) { continue; }
+            if !dir.join("MAA.exe").is_file() {
+                continue;
+            }
+            if !dir.join("resource").join("version.json").is_file() {
+                continue;
+            }
+            if !seen.insert(canon(dir)) {
+                continue;
+            }
             out.push(inspect(dir, &sys));
         }
     }
@@ -73,8 +81,12 @@ fn channel_of(cfg: &serde_json::Value) -> String {
     }
     if let Some(s) = v.as_str() {
         let l = s.to_lowercase();
-        if l == "nightly" || l == "alpha" || l == "0" { return "alpha".to_string(); }
-        if l == "beta" || l == "1" { return "beta".to_string(); }
+        if l == "nightly" || l == "alpha" || l == "0" {
+            return "alpha".to_string();
+        }
+        if l == "beta" || l == "1" {
+            return "beta".to_string();
+        }
         return "stable".to_string();
     }
     "stable".to_string()
@@ -82,8 +94,14 @@ fn channel_of(cfg: &serde_json::Value) -> String {
 
 fn pending_of(dir: &Path, cfg: &serde_json::Value) -> Option<String> {
     let name = cfg["Update"]["UpdatePackage"].as_str()?;
-    if name.is_empty() { return None; }
-    if dir.join(name).is_file() { Some(name.to_string()) } else { None }
+    if name.is_empty() {
+        return None;
+    }
+    if dir.join(name).is_file() {
+        Some(name.to_string())
+    } else {
+        None
+    }
 }
 
 fn read_resource_time(dir: &Path) -> Option<String> {
@@ -100,9 +118,11 @@ pub fn is_running_now(dir: &Path) -> bool {
 
 fn is_running(sys: &System, dir: &Path) -> bool {
     let want = canon(&dir.join("MAA.exe"));
-    for (_, p) in sys.processes() {
+    for p in sys.processes().values() {
         if let Some(exe) = p.exe() {
-            if canon(exe) == want { return true; }
+            if canon(exe) == want {
+                return true;
+            }
         }
     }
     false
