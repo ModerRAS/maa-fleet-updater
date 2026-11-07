@@ -9,7 +9,13 @@ use tokio::sync::broadcast;
 use walkdir::WalkDir;
 
 fn git_args(proxy: &str) -> Vec<String> {
-    let mut a = Vec::new();
+    // Fail fast on half-dead connections instead of hanging the prepare phase.
+    let mut a = vec![
+        "-c".to_string(),
+        "http.lowSpeedLimit=1024".to_string(),
+        "-c".to_string(),
+        "http.lowSpeedTime=60".to_string(),
+    ];
     if !proxy.trim().is_empty() {
         a.push("-c".to_string());
         a.push(format!("http.proxy={}", proxy.trim()));

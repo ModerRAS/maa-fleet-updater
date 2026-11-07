@@ -61,7 +61,16 @@ async fn try_one(
         .map_err(|e| format!("create file: {e}"))?;
     let mut done: u64 = 0;
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // Stall watchdog: 60s without a single chunk -> give up on this URL
+        // so a half-dead connection fails over to the next mirror instead of
+        // hanging the whole prepare phase forever.
+        let next = tokio::time::timeout(std::time::Duration::from_secs(60), stream.next()).await;
+        let chunk = match next {
+            Err(_) => return Err("stalled: no data for 60s, failing over".to_string()),
+            Ok(None) => break,
+            Ok(Some(c)) => c,
+        };
         let c = chunk.map_err(|e| format!("body: {e}"))?;
         f.write_all(&c).await.map_err(|e| format!("write: {e}"))?;
         done += c.len() as u64;
