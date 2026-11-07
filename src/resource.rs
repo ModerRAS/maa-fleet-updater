@@ -54,9 +54,7 @@ pub async fn ensure_repo(
     if repo_dir.join(".git").is_dir() {
         return Ok(());
     }
-    if let Some(p) = repo_dir.parent() {
-        std::fs::create_dir_all(p).map_err(|e| format!("mkdir repo: {e}"))?;
-    }
+    crate::fsutil::ensure_parent(repo_dir, "resource repo")?;
     git(
         None,
         proxy,
@@ -134,9 +132,7 @@ pub fn merge_into(
             continue;
         }
         let dst = instance_dir.join(rel);
-        if let Some(p) = dst.parent() {
-            std::fs::create_dir_all(p).map_err(|e| format!("mkdir: {e}"))?;
-        }
+        crate::fsutil::ensure_parent(&dst, "resource file")?;
         std::fs::copy(&src, &dst).map_err(|e| format!("copy {}: {e}", rel.display()))?;
         n += 1;
     }

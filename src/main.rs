@@ -2,6 +2,7 @@ mod autostart;
 mod config;
 mod discover;
 mod downloader;
+mod fsutil;
 mod maa_api;
 mod pe_version;
 mod resource;
@@ -283,6 +284,9 @@ fn load_plan(cfg: &config::Config) -> Plan {
 }
 
 fn save_plan(cfg: &config::Config, plan: &Plan) -> Result<(), String> {
+    if cfg.staging_dir.as_os_str().is_empty() {
+        return Err("staging_dir is empty; set it in WebUI config".to_string());
+    }
     std::fs::create_dir_all(&cfg.staging_dir).map_err(|e| format!("mkdir staging: {e}"))?;
     let t = serde_json::to_string_pretty(plan).map_err(|e| format!("serialize plan: {e}"))?;
     std::fs::write(plan_path(cfg), t).map_err(|e| format!("write plan: {e}"))

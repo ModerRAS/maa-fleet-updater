@@ -22,11 +22,7 @@ pub async fn download_first(
     dest: &Path,
     mut on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
-    if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("mkdir: {e}"))?;
-    }
+    crate::fsutil::ensure_parent_async(dest, "download").await?;
     let mut last_err = String::from("no urls");
     for url in urls {
         match try_one(client, url, dest, &mut on_progress).await {

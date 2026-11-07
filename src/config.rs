@@ -185,6 +185,9 @@ impl Config {
         if self.search_roots.is_empty() {
             return Err("search_roots must not be empty".to_string());
         }
+        if self.staging_dir.as_os_str().is_empty() {
+            return Err("staging_dir must not be empty".to_string());
+        }
         if self.max_depth == 0 || self.max_depth > 12 {
             return Err("max_depth must be 1..=12".to_string());
         }
