@@ -5,26 +5,31 @@
 <title>MAA Fleet Updater</title>
 <style>
 body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;background:#0f141b;color:#dbe4ee}
-h1{font-size:20px}h2{font-size:16px;margin-top:28px}
+h1{font-size:20px}h2{font-size:16px;margin-top:28px}h3{font-size:14px;margin:14px 0 6px;color:#9aa7b8}
 button{background:#2b6cb0;color:#fff;border:0;border-radius:6px;padding:8px 16px;margin:4px 8px 4px 0;cursor:pointer}
-button:disabled{opacity:.45;cursor:wait}button.warn{background:#975a16}button.danger{background:#9b2c2c}
+button:disabled{opacity:.45;cursor:wait}button.warn{background:#975a16}button.danger{background:#9b2c2c}button.big{font-size:15px;padding:10px 22px}
 table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
 th,td{border:1px solid #2d3748;padding:6px 8px;text-align:left;vertical-align:top}
 th{background:#1a202c}.mono{font-family:Consolas,monospace;font-size:12px;word-break:break-all}
 #log{background:#000;border-radius:8px;padding:12px;height:300px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
 input[type=text],input[type=password],input[type=number]{background:#1a202c;border:1px solid #2d3748;color:#dbe4ee;border-radius:6px;padding:7px 10px}
+input.bad{border-color:#e53e3e}
 input.wide{width:420px}input.num{width:90px}
 label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 .card{background:#161d27;border:1px solid #2d3748;border-radius:8px;padding:12px;margin-top:8px}
+.step{border-left:4px solid #2b6cb0;padding:4px 0 4px 12px;margin-top:20px}
+.step.done{border-color:#22543d}
 .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px}
 .ok{background:#22543d}.bad{background:#742a2a}.idle{background:#2d3748}
 .listitem{display:flex;gap:8px;align-items:center;margin:4px 0}
 .note{font-size:12px;color:#9aa7b8}
-#toast{position:sticky;top:0;margin:8px 0;padding:10px 14px;border-radius:8px;font-size:14px;display:none}
+.stat{font-size:22px;font-weight:bold}
+#toast{position:sticky;top:0;margin:8px 0;padding:10px 14px;border-radius:8px;font-size:14px;display:none;z-index:10}
 #toast.show{display:block}
 #toast.ok{background:#22543d}#toast.err{background:#742a2a}
 #dirtytag{display:none}
+#firstrun{display:none;background:#3a2b12;border:1px solid #975a16;border-radius:8px;padding:12px;margin-top:8px}
 </style></head>
 <body>
 <h1>MAA Fleet Updater</h1>
@@ -36,39 +41,53 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <span id="busy" class="pill idle">空闲</span>
 <span id="cfgwarn" class="note"></span>
 </div>
+<div id="firstrun"><b>首次使用？</b><span> 先到下面「配置」里把 MAA 所在的目录加进搜索根目录，保存后再点刷新状态。</span></div>
+<h2>状态总览</h2>
+<div class="card"><div class="row"><button onclick="refreshAll(this)">刷新状态</button>
+<label><input id="autoref" type="checkbox" checked /> 每 15 秒自动刷新</label></div>
+<div class="row" id="dash" style="gap:24px"></div>
+<div class="note" id="lastruns"></div></div>
+<div class="step" id="step1"><h2>步骤 1：准备（可联网，任何时候都能做）</h2>
+<div class="note">查版本 → 下 OTA/完整包（GitHub 直链走代理）→ 中央资源库 git pull。全部落盘到中转目录，不碰任何实例。</div>
+<div class="row"><label><input id="forcefull" type="checkbox" /> 强制完整包（默认 OTA，有人掉版本时才勾）</label></div>
+<div class="row"><button class="big" onclick="runPrepare(this)">开始准备</button><span id="prepstat" class="note"></span></div></div>
+<div class="step" id="step2"><h2>步骤 2：确认计划</h2>
+<div class="note">下面是上次准备的结果：谁要更新、用什么包、包下好没。没跑过准备就是空的。</div>
+<table><thead><tr><th>实例</th><th>当前 → 目标</th><th>方式</th><th>包状态</th></tr></thead><tbody id="plantable"><tr><td colspan="4" class="note">暂无计划，先做步骤 1</td></tr></tbody></table></div>
+<div class="step" id="step3"><h2>步骤 3：提交 + 拉起（重启后自动做，也可手动）</h2>
+<div class="note">把包和资源写进未运行的实例、注册 pending、逐个拉起 MAA。运行中的实例会自动跳过，等下次重启。</div>
+<div class="row"><button onclick="previewCommit(this)">预览这次提交会做什么</button>
+<button class="big" onclick="doPost(this,&quot;/api/commit&quot;)">提交+拉起</button>
+<button onclick="doPost(this,&quot;/api/launch&quot;)">仅拉起（无更新时也照常用它开机）</button></div>
+<div id="preview" class="mono note"></div></div>
 <h2>实例</h2>
-<div class="row"><button onclick="loadInstances(this)">刷新实例</button>
-<button onclick="loadPlan(this)">查看计划</button></div>
 <table><thead><tr><th>目录</th><th>版本</th><th>通道</th><th>资源时间</th><th>运行</th><th>待装包</th></tr></thead>
 <tbody id="instances"><tr><td colspan="6" class="note">未加载</td></tr></tbody></table>
-<h2>流水线（准备可联网，提交零网络）</h2>
-<div class="row">
-<button onclick="runPrepare(this,false)">准备（OTA 优先）</button>
-<button class="warn" onclick="runPrepare(this,true)">准备（强制完整包）</button>
-<button onclick="doPost(this,&quot;/api/commit&quot;)">提交+拉起（开机阶段）</button>
-<button onclick="doPost(this,&quot;/api/launch&quot;)">仅拉起</button>
-</div>
 <h2>配置（保存即生效，换监听地址需重启） <span id="dirtytag" class="pill bad">有未保存修改</span></h2>
 <div class="card">
+<h3>实例发现</h3>
 <div class="row"><label>搜索根目录（多个 MAA 路径都加进来）</label></div>
 <div id="roots"></div>
-<div class="row"><input id="newroot" class="wide" type="text" placeholder="如 D:/MAA-SSD" /><button onclick="addRoot(this)">添加</button></div>
-<div class="row"><label>搜索深度 <input id="f_max_depth" class="num" type="number" min="1" max="12" oninput="dirty()" /></label>
-<label>拉起间隔秒 <input id="f_stagger" class="num" type="number" min="0" max="300" oninput="dirty()" /></label>
-<label>自动准备小时 <input id="f_autoprep" class="num" type="number" min="0" max="168" oninput="dirty()" /></label></div>
+<div class="row"><input id="newroot" class="wide" type="text" placeholder="如 D:/MAA-SSD" /><button onclick="addRoot(this)">添加</button>
+<label>搜索深度 <input id="f_max_depth" class="num" type="number" min="1" max="12" oninput="dirty()" /></label></div>
+<h3>下载与更新</h3>
 <div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" oninput="dirty()" /></label></div>
 <div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" oninput="dirty()" /></label>
 <label>分支 <input id="f_branch" type="text" size="10" oninput="dirty()" /></label></div>
-<div class="row"><label>代理（空=直连） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" oninput="dirty()" /></label></div>
-<div class="row"><label>监听地址 <input id="f_bind" type="text" oninput="dirty()" /></label>
-<label>Token <input id="f_token" type="text" oninput="dirty()" /></label></div>
+<div class="row"><label>代理（空=直连，GitHub 与 git 共用） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" oninput="dirty()" /></label></div>
 <div class="row"><label>API 基地址列表</label></div>
 <div id="apis"></div>
-<div class="row"><input id="newapi" class="wide" type="text" placeholder="https://..." /><button onclick="addApi(this)">添加</button></div>
+<div class="row"><input id="newapi" class="wide" type="text" placeholder="https://" /><button onclick="addApi(this)">添加</button></div>
+<div class="row"><label>拉起间隔秒（错开 IO） <input id="f_stagger" class="num" type="number" min="0" max="300" oninput="dirty()" /></label>
+<label>自动准备小时（0=关） <input id="f_autoprep" class="num" type="number" min="0" max="168" oninput="dirty()" /></label></div>
+<h3>开机行为</h3>
 <div class="row">
 <label><input id="f_commit" type="checkbox" onchange="dirty()" /> 开机自动提交+拉起</label>
-<label><input id="f_takeover" type="checkbox" onchange="dirty()" /> 接管实例开机自启</label>
+<label><input id="f_takeover" type="checkbox" onchange="dirty()" /> 接管实例开机自启（删 MAA 自带计划任务项）</label>
 </div>
+<h3>网页服务</h3>
+<div class="row"><label>监听地址（改了需重启本程序） <input id="f_bind" type="text" oninput="dirty()" /></label>
+<label>Token（空=不鉴权） <input id="f_token" type="text" oninput="dirty()" /></label></div>
 <div class="row"><button onclick="saveConfig(this)">保存配置</button><span id="savemsg" class="note"></span></div>
 </div>
 <h2>本程序开机自启（计划任务）</h2>
@@ -78,14 +97,13 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <button class="danger" onclick="autostart(this,false)">取消开机自启</button>
 <span id="asstat" class="pill idle">?</span></div>
 <div id="asdetail" class="mono note"></div></div>
-<h2>日志（所有操作结果都会先弹横幅，同时记在这里）</h2>
+<h2>日志</h2>
+<div class="row"><button onclick="clearLog(this)">清空</button><label><input id="pause" type="checkbox" /> 暂停滚动</label></div>
 <div id="log"></div>
 <script>
 var TOKEN = localStorage.getItem("fleet_token") || "";
 document.getElementById("token").value = TOKEN;
-var CFG = null;
-var es = null;
-var toastTimer = 0;
+var CFG = null, STATUS = null, es = null, toastTimer = 0, refTimer = 0;
 function setBusy(on){ var b=document.getElementById("busy"); b.textContent = on ? "执行中…" : "空闲"; b.className = "pill " + (on ? "bad" : "idle"); }
 function toast(msg, ok){
   var t=document.getElementById("toast");
@@ -95,17 +113,21 @@ function toast(msg, ok){
   if(toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(function(){ t.className=""; }, ok ? 4000 : 12000);
 }
-function log(t){ var el=document.getElementById("log"); el.textContent += t + "\n"; el.scrollTop = el.scrollHeight; }
+function log(t){ var el=document.getElementById("log"); el.textContent += t + "\n"; if(!document.getElementById("pause").checked) el.scrollTop = el.scrollHeight; }
+function clearLog(){ document.getElementById("log").textContent=""; }
 function hdr(){ var h={"content-type":"application/json"}; if(TOKEN) h["x-token"]=TOKEN; return h; }
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
 function pill(ok, txt){ return "<span class=\"pill "+(ok?"ok":"bad")+"\">"+esc(txt)+"</span>"; }
+function ftime(ts){ if(!ts) return "-"; try{ return new Date(ts*1000).toLocaleString(); }catch(e){ return String(ts); } }
+function shortDir(d){ var p=String(d).replace(/\\/g,"/").split("/"); if(p.length<=2) return d; return p.slice(-2).join("/"); }
 async function api(path, method, body){
   setBusy(true);
   try {
     var r = await fetch(path, {method: method, headers: hdr(), body: body ? JSON.stringify(body) : undefined});
     var t = await r.text();
     var j = null; try{ j = JSON.parse(t); }catch(e){}
-    if(!r.ok) return {ok:false, status:r.status, text:t, json:j};
+    if(!r.ok){ if(r.status===401){ var ti=document.getElementById("token"); ti.className="bad"; toast("401 未授权：顶部 Token 与配置对不上。 token 忘了就停服务、把 config.json 里 auth_token 清空再重启", false); } return {ok:false, status:r.status, text:t, json:j}; }
+    document.getElementById("token").className="";
     return {ok:true, status:r.status, text:t, json:j};
   } catch(e){ return {ok:false, status:0, text:String(e), json:null}; }
   finally { setBusy(false); }
@@ -118,30 +140,82 @@ function markDirty(){ document.getElementById("dirtytag").style.display="inline-
 function clearDirty(){ document.getElementById("dirtytag").style.display="none"; }
 function dirty(){ markDirty(); }
 function saveToken(btn){ withBtn(btn, async function(){ TOKEN=document.getElementById("token").value; localStorage.setItem("fleet_token", TOKEN); connect(); toast("Token 已保存并重连日志流", true); }); }
-function loadInstances(btn){ withBtn(btn, async function(){
-  var r = await api("/api/instances", "GET");
-  if(!r.ok){ document.getElementById("instances").innerHTML="<tr><td colspan=\"6\">加载失败："+esc(r.text)+"</td></tr>"; toast("刷新实例失败（HTTP "+r.status+"）："+r.text, false); return; }
-  var list = r.json || [];
+function instByDir(dir){ if(!STATUS) return null; var l=STATUS.instances||[]; for(var i=0;i<l.length;i++){ if(l[i].dir===dir) return l[i]; } return null; }
+function refreshAll(btn){ withBtn(btn, async function(){
+  var r = await api("/api/status", "GET");
+  if(!r.ok){ toast("刷新状态失败（HTTP "+r.status+"）："+r.text, false); return; }
+  STATUS = r.json;
+  renderDash(); renderInstances(); renderPlan(); renderLast(); renderAutostart();
+  document.getElementById("firstrun").style.display = ((STATUS.instances||[]).length===0) ? "block" : "none";
+}); }
+function kindLabel(k){ if(k==="ota") return "OTA 增量"; if(k==="full") return "完整包"; return "无"; }
+function renderDash(){
+  var inst = STATUS.instances || [];
+  var items = (STATUS.plan && STATUS.plan.items) || [];
+  var need = 0, staged = 0, running = 0;
+  for(var i=0;i<inst.length;i++){ if(inst[i].running) running++; }
+  for(var j=0;j<items.length;j++){ if(items[j].kind!=="none"){ need++; if(items[j].downloaded) staged++; } }
+  document.getElementById("dash").innerHTML =
+    "<div><div class=\"stat\">"+inst.length+"</div><div class=\"note\">实例</div></div>"+
+    "<div><div class=\"stat\">"+running+"</div><div class=\"note\">运行中</div></div>"+
+    "<div><div class=\"stat\">"+need+"</div><div class=\"note\">待更新</div></div>"+
+    "<div><div class=\"stat\">"+staged+"/"+need+"</div><div class=\"note\">包已就绪</div></div>";
+  document.getElementById("step1").className = "step" + (need>0 ? " done" : "");
+}
+function renderInstances(){
+  var list = STATUS.instances || [];
   document.getElementById("instances").innerHTML = list.map(function(i){
-    return "<tr><td class=\"mono\">"+esc(i.dir)+"</td><td class=\"mono\">"+esc(i.exe_version_raw)+"</td><td>"+esc(i.channel)+"</td><td class=\"mono\">"+esc(i.resource_time||"-")+"</td><td>"+(i.running?pill(true,"运行中"):pill(false,"stopped"))+"</td><td class=\"mono\">"+esc(i.pending_package||"-")+"</td></tr>";
+    return "<tr title=\""+esc(i.dir)+"\"><td class=\"mono\">"+esc(shortDir(i.dir))+"</td><td class=\"mono\">"+esc(i.exe_version_raw)+"</td><td>"+esc(i.channel)+"</td><td class=\"mono\">"+esc(i.resource_time||"-")+"</td><td>"+(i.running?pill(true,"运行中"):pill(false,"stopped"))+"</td><td class=\"mono\">"+esc(i.pending_package||"-")+"</td></tr>";
   }).join("") || "<tr><td colspan=\"6\" class=\"note\">未发现实例：检查搜索根目录</td></tr>";
-  toast("刷新实例完成，共 "+list.length+" 个", true);
-}); }
-function loadPlan(btn){ withBtn(btn, async function(){
-  var r = await api("/api/plan", "GET");
-  if(!r.ok){ toast("查看计划失败（HTTP "+r.status+"）："+r.text, false); return; }
-  log("plan: " + JSON.stringify(r.json, null, 1));
-  toast("计划已输出到日志", true);
-}); }
-function runPrepare(btn, force){ withBtn(btn, async function(){
+}
+function renderPlan(){
+  var items = (STATUS.plan && STATUS.plan.items) || [];
+  document.getElementById("plantable").innerHTML = items.map(function(p){
+    var st = p.kind==="none" ? "-" : ((p.downloaded ? "已下载 " : "待下载 ") + esc(p.file_name));
+    return "<tr title=\""+esc(p.dir)+"\"><td class=\"mono\">"+esc(shortDir(p.dir))+"</td><td class=\"mono\">"+esc(p.cur_raw||"-")+" → "+esc(p.latest||"-")+"</td><td>"+kindLabel(p.kind)+"</td><td class=\"mono\">"+st+"</td></tr>";
+  }).join("") || "<tr><td colspan=\"4\" class=\"note\">暂无计划，先做步骤 1</td></tr>";
+}
+function renderLast(){
+  var lp = STATUS.last_prepare, lc = STATUS.last_commit, s = "";
+  s += "<div>上次准备：" + (lp && lp.at ? ftime(lp.at) : "无") + "</div>";
+  s += "<div>上次提交：" + (lc && lc.at ? ftime(lc.at) : "无") + "</div>";
+  if(lc && lc.committed){ var ok=0; for(var i=0;i<lc.committed.length;i++){ if(lc.committed[i].ok) ok++; } s += "<div>提交结果：" + ok + "/" + lc.committed.length + " 成功</div>"; }
+  document.getElementById("lastruns").innerHTML = s;
+}
+function renderAutostart(){
+  var el = document.getElementById("asstat");
+  el.textContent = STATUS.autostart_registered ? "已注册" : "未注册";
+  el.className = "pill " + (STATUS.autostart_registered ? "ok" : "idle");
+  document.getElementById("asdetail").textContent = STATUS.autostart_detail || "";
+}
+function runPrepare(btn){ withBtn(btn, async function(){
+  var force = document.getElementById("forcefull").checked;
   var r = await api("/api/prepare", "POST", {force_full: force});
   if(!r.ok){ toast("准备任务启动失败（HTTP "+r.status+"）："+r.text, false); return; }
-  toast("准备任务已启动，进度看日志流", true);
+  document.getElementById("prepstat").textContent = "准备中…完成后点刷新状态";
+  toast("准备任务已启动，进度看日志，完成后刷新状态", true);
 }); }
 function doPost(btn, path){ withBtn(btn, async function(){
   var r = await api(path, "POST");
   if(!r.ok){ toast("请求失败（HTTP "+r.status+"）："+r.text, false); return; }
   toast("已接受，结果看日志流", true);
+}); }
+function previewCommit(btn){ withBtn(btn, async function(){
+  if(!STATUS){ toast("先刷新状态", false); return; }
+  var items = (STATUS.plan && STATUS.plan.items) || [];
+  var central = STATUS.plan && STATUS.plan.resource_time;
+  var out = [];
+  var inst = STATUS.instances || [];
+  for(var i=0;i<inst.length;i++){
+    var it = inst[i], acts = [];
+    if(it.running){ out.push(shortDir(it.dir) + "：跳过（运行中，下次重启再说）"); continue; }
+    var p = null;
+    for(var j=0;j<items.length;j++){ if(items[j].dir===it.dir){ p=items[j]; break; } }
+    if(p && p.kind!=="none"){ acts.push("安装" + (p.kind==="ota"?"OTA":"完整包") + esc(p.file_name)); }
+    if(central && (!it.resource_time || it.resource_time < central)){ acts.push("同步资源"); }
+    out.push(shortDir(it.dir) + "：" + (acts.length ? acts.join(" + ") : "无事可做"));
+  }
+  document.getElementById("preview").innerHTML = out.join("<br/>") || "无实例";
 }); }
 function renderList(el, items, del){
   document.getElementById(el).innerHTML = items.map(function(v, i){
@@ -154,7 +228,7 @@ function delApi(btn, i){ withBtn(btn, async function(){ CFG.maa_api_bases.splice
 function addApi(btn){ withBtn(btn, async function(){ var v=document.getElementById("newapi").value.trim(); if(!v){ toast("先填写地址", false); return; } CFG.maa_api_bases.push(v); document.getElementById("newapi").value=""; renderList("apis", CFG.maa_api_bases, "delApi"); markDirty(); toast("已加入待保存（记得点保存配置）", true); }); }
 function loadConfig(btn){ withBtn(btn, async function(){
   var r = await api("/api/config", "GET");
-  if(!r.ok){ toast("加载配置失败（HTTP "+r.status+"）："+r.text+"。若刚改了 token，先在顶部 Token 框同步", false); return; }
+  if(!r.ok){ toast("加载配置失败（HTTP "+r.status+"）："+r.text, false); return; }
   CFG = r.json;
   document.getElementById("f_max_depth").value = CFG.max_depth;
   document.getElementById("f_stagger").value = CFG.launch_stagger_secs;
@@ -186,12 +260,12 @@ function collectConfig(){
   CFG.takeover_autostart = document.getElementById("f_takeover").checked;
 }
 function saveConfig(btn){ withBtn(btn, async function(){
-  if(!CFG){ toast("配置尚未加载，先点保存旁边的重载", false); await loadConfig(); return; }
+  if(!CFG){ toast("配置尚未加载", false); return; }
   collectConfig();
   var r = await api("/api/config", "POST", CFG);
   if(!r.ok){ toast("保存失败（HTTP "+r.status+"）："+r.text, false); return; }
   clearDirty();
-  document.getElementById("savemsg").textContent = "";
+  document.getElementById("savemsg");
   if(r.json && r.json.restart_needed){ document.getElementById("cfgwarn").textContent = "监听地址已改，需重启本程序"; toast("已保存，但监听地址变更需重启本程序", true); }
   else toast("配置已保存，即时生效", true);
   if(CFG.auth_token !== TOKEN){ document.getElementById("cfgwarn").textContent = "Token 已变更：请同步到顶部 Token 框并保存，否则后续请求会 401"; }
@@ -203,14 +277,14 @@ function loadAutostart(btn){ withBtn(btn, async function(){
   el.textContent = r.json.registered ? "已注册" : "未注册";
   el.className = "pill " + (r.json.registered ? "ok" : "idle");
   document.getElementById("asdetail").textContent = r.json.detail || "";
-  toast("开机自启状态：" + (r.json.registered ? "已注册" : "未注册"), true);
 }); }
 function autostart(btn, on){ withBtn(btn, async function(){
   var r = await api("/api/autostart", "POST", {action: on ? "enable" : "disable"});
   if(!r.ok){ toast((on ? "注册" : "取消") + "失败（HTTP "+r.status+"）："+r.text, false); return; }
   toast((on ? "注册" : "取消") + "成功：" + ((r.json && r.json.msg) || ""), true);
-  loadAutostart();
+  refreshAll();
 }); }
+function clearLog(btn){ document.getElementById("log").textContent=""; }
 var esFailNotified = false;
 function connect(){
   if(es){ try{ es.close(); }catch(e){} es = null; }
@@ -220,6 +294,7 @@ function connect(){
   es.onmessage = function(e){ try{ var o=JSON.parse(e.data); log("["+o.level+"] "+o.msg); }catch(_){ log(e.data); } };
   es.onerror = function(){ document.getElementById("health").textContent="log-stream down"; if(!esFailNotified){ esFailNotified=true; toast("日志流断开（token 错误或服务不可达），检查顶部 Token", false); } };
 }
-connect(); loadInstances(); loadConfig(); loadAutostart();
+function autoRef(){ if(document.getElementById("autoref").checked){ refreshAll(); } }
+connect(); refreshAll(); loadConfig(); setInterval(autoRef, 15000);
 </script>
 </body></html>

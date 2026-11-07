@@ -61,6 +61,28 @@ async fn plan(State(state): State<AppState>) -> impl IntoResponse {
     Json(p)
 }
 
+/// One call powering the dashboard: live scan + plan + last run summaries.
+async fn status(State(state): State<AppState>) -> impl IntoResponse {
+    let cfg = state.inner.cfg.read().await.clone();
+    let cfg_path = state.inner.cfg_path.clone();
+    let staging = cfg.staging_dir.clone();
+    let c2 = cfg.clone();
+    let (instances, auto) =
+        tokio::task::spawn_blocking(move || (discover::scan(&c2), autostart::status()))
+            .await
+            .unwrap_or_default();
+    let plan = load_plan(&cfg);
+    Json(serde_json::json!({
+        "instances": instances,
+        "plan": plan,
+        "last_prepare": read_json_opt(staging.join("last_prepare.json")),
+        "last_commit": read_json_opt(staging.join("last_commit.json")),
+        "autostart_registered": auto.0,
+        "autostart_detail": auto.1,
+        "config_path": cfg_path.to_string_lossy(),
+    }))
+}
+
 async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
     let cfg = state.inner.cfg.read().await.clone();
     Json(cfg)
@@ -421,12 +443,22 @@ async fn run_prepare(state: &AppState, force_full: bool) {
         Ok(()) => emit(&tx, "info", format!("prepare done in {:?}", t0.elapsed())),
         Err(e) => emit(&tx, "error", format!("save plan: {e}")),
     }
+    let summary = serde_json::json!({
+        "at": now_ts(),
+        "items": plan.items.iter().map(|i| serde_json::json!({
+            "dir": i.dir, "cur": i.cur_raw, "latest": i.latest,
+            "kind": i.kind, "file": i.file_name, "downloaded": i.downloaded,
+        })).collect::<Vec<_>>(),
+        "resource_time": plan.resource_time,
+    });
+    write_json(&cfg.staging_dir.join("last_prepare.json"), &summary);
 }
 
 /// Commit + launch (zero network): stage files into stopped instances, then launch all.
 async fn run_commit_launch(state: &AppState) {
     let tx = state.inner.tx.clone();
     let cfg = state.inner.cfg.read().await.clone();
+    let staging = cfg.staging_dir.clone();
     let plan = load_plan(&cfg);
     let reports = tokio::task::spawn_blocking({
         let c = cfg.clone();
@@ -435,7 +467,7 @@ async fn run_commit_launch(state: &AppState) {
     })
     .await
     .unwrap_or_default();
-    let dirs: Vec<PathBuf> = reports.into_iter().map(|r| r.dir).collect();
+    let dirs: Vec<PathBuf> = reports.iter().map(|r| r.dir.clone()).collect();
     let dirs = if dirs.is_empty() {
         let c = cfg.clone();
         tokio::task::spawn_blocking(move || {
@@ -459,6 +491,31 @@ async fn run_commit_launch(state: &AppState) {
             format!("launch result {}: {}", r.dir.display(), r.note),
         );
     }
+    let summary = serde_json::json!({ "at": now_ts(), "committed": reports, "launched": reps });
+    write_json(&staging.join("last_commit.json"), &summary);
+}
+
+fn now_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn write_json(path: &std::path::Path, v: &serde_json::Value) {
+    if let Some(p) = path.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    if let Ok(t) = serde_json::to_string_pretty(v) {
+        let _ = std::fs::write(path, t);
+    }
+}
+
+fn read_json_opt(path: std::path::PathBuf) -> serde_json::Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null)
 }
 
 fn parse_args() -> (PathBuf, bool) {
@@ -528,6 +585,7 @@ async fn main() {
         .route("/api/health", get(health))
         .route("/api/instances", get(instances))
         .route("/api/plan", get(plan))
+        .route("/api/status", get(status))
         .route("/api/prepare", post(prepare))
         .route("/api/commit", post(commit))
         .route("/api/launch", post(launch))

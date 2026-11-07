@@ -9,6 +9,7 @@ use crate::state::{emit, InstanceInfo, Plan, PlanItem};
 use std::path::{Path, PathBuf};
 use tokio::sync::broadcast;
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CommitReport {
     pub dir: PathBuf,
     pub ok: bool,
@@ -17,6 +18,7 @@ pub struct CommitReport {
     pub note: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LaunchReport {
     pub dir: PathBuf,
     pub launched: bool,
