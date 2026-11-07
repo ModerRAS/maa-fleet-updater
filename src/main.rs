@@ -583,19 +583,29 @@ fn default_config_path() -> PathBuf {
 }
 
 fn parse_args() -> (PathBuf, bool) {
-    let mut cfg = default_config_path();
+    // No --config: primary double-click use, anchor next to the exe.
+    // Explicit relative --config: classic CLI semantics, resolve against CWD.
+    let mut cfg: Option<PathBuf> = None;
     let mut once = false;
+    let mut explicit = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         if a == "--config" {
             if let Some(v) = it.next() {
-                cfg = PathBuf::from(v);
+                cfg = Some(PathBuf::from(v));
+                explicit = true;
             }
         } else if a == "--commit-once" {
             once = true;
         }
     }
-    anchor_to_exe_dir(&mut cfg);
+    let mut cfg = cfg.unwrap_or_else(default_config_path);
+    let anchor = !explicit;
+    // Default (double-click): anchor next to the exe.
+    // Explicit --config: classic CLI semantics, resolve against CWD.
+    if anchor {
+        anchor_to_exe_dir(&mut cfg);
+    }
     (cfg, once)
 }
 
