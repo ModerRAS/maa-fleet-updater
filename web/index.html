@@ -7,7 +7,7 @@
 body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;background:#0f141b;color:#dbe4ee}
 h1{font-size:20px}h2{font-size:16px;margin-top:28px}
 button{background:#2b6cb0;color:#fff;border:0;border-radius:6px;padding:8px 16px;margin:4px 8px 4px 0;cursor:pointer}
-button:disabled{opacity:.5}button.warn{background:#975a16}button.danger{background:#9b2c2c}
+button:disabled{opacity:.45;cursor:wait}button.warn{background:#975a16}button.danger{background:#9b2c2c}
 table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
 th,td{border:1px solid #2d3748;padding:6px 8px;text-align:left;vertical-align:top}
 th{background:#1a202c}.mono{font-family:Consolas,monospace;font-size:12px;word-break:break-all}
@@ -21,111 +21,158 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 .ok{background:#22543d}.bad{background:#742a2a}.idle{background:#2d3748}
 .listitem{display:flex;gap:8px;align-items:center;margin:4px 0}
 .note{font-size:12px;color:#9aa7b8}
+#toast{position:sticky;top:0;margin:8px 0;padding:10px 14px;border-radius:8px;font-size:14px;display:none}
+#toast.show{display:block}
+#toast.ok{background:#22543d}#toast.err{background:#742a2a}
+#dirtytag{display:none}
 </style></head>
 <body>
 <h1>MAA Fleet Updater</h1>
+<div id="toast"></div>
 <div class="row">
 <label>Token <input id="token" type="password" size="20" /></label>
-<button onclick="saveToken()">保存 Token</button>
+<button onclick="saveToken(this)">保存 Token</button>
 <span id="health" class="pill idle">?</span>
+<span id="busy" class="pill idle">空闲</span>
 <span id="cfgwarn" class="note"></span>
 </div>
 <h2>实例</h2>
-<div class="row"><button onclick="loadInstances()">刷新实例</button>
-<button onclick="loadPlan()">查看计划</button></div>
+<div class="row"><button onclick="loadInstances(this)">刷新实例</button>
+<button onclick="loadPlan(this)">查看计划</button></div>
 <table><thead><tr><th>目录</th><th>版本</th><th>通道</th><th>资源时间</th><th>运行</th><th>待装包</th></tr></thead>
-<tbody id="instances"></tbody></table>
+<tbody id="instances"><tr><td colspan="6" class="note">未加载</td></tr></tbody></table>
 <h2>流水线（准备可联网，提交零网络）</h2>
 <div class="row">
-<button onclick="runPrepare(false)">准备（OTA 优先）</button>
-<button class="warn" onclick="runPrepare(true)">准备（强制完整包）</button>
-<button onclick="post('/api/commit')">提交+拉起（开机阶段）</button>
-<button onclick="post('/api/launch')">仅拉起</button>
+<button onclick="runPrepare(this,false)">准备（OTA 优先）</button>
+<button class="warn" onclick="runPrepare(this,true)">准备（强制完整包）</button>
+<button onclick="doPost(this,&quot;/api/commit&quot;)">提交+拉起（开机阶段）</button>
+<button onclick="doPost(this,&quot;/api/launch&quot;)">仅拉起</button>
 </div>
-<h2>配置（保存即生效，换监听地址需重启）</h2>
+<h2>配置（保存即生效，换监听地址需重启） <span id="dirtytag" class="pill bad">有未保存修改</span></h2>
 <div class="card">
 <div class="row"><label>搜索根目录（多个 MAA 路径都加进来）</label></div>
 <div id="roots"></div>
-<div class="row"><input id="newroot" class="wide" type="text" placeholder="如 D:/MAA-SSD" /><button onclick="addRoot()">添加</button></div>
-<div class="row"><label>搜索深度 <input id="f_max_depth" class="num" type="number" min="1" max="12" /></label>
-<label>拉起间隔秒 <input id="f_stagger" class="num" type="number" min="0" max="300" /></label>
-<label>自动准备小时 <input id="f_autoprep" class="num" type="number" min="0" max="168" /></label></div>
-<div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" /></label></div>
-<div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" /></label>
-<label>分支 <input id="f_branch" type="text" size="10" /></label></div>
-<div class="row"><label>代理（空=直连） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" /></label></div>
-<div class="row"><label>监听地址 <input id="f_bind" type="text" /></label>
-<label>Token <input id="f_token" type="text" /></label></div>
+<div class="row"><input id="newroot" class="wide" type="text" placeholder="如 D:/MAA-SSD" /><button onclick="addRoot(this)">添加</button></div>
+<div class="row"><label>搜索深度 <input id="f_max_depth" class="num" type="number" min="1" max="12" oninput="dirty()" /></label>
+<label>拉起间隔秒 <input id="f_stagger" class="num" type="number" min="0" max="300" oninput="dirty()" /></label>
+<label>自动准备小时 <input id="f_autoprep" class="num" type="number" min="0" max="168" oninput="dirty()" /></label></div>
+<div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" oninput="dirty()" /></label></div>
+<div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" oninput="dirty()" /></label>
+<label>分支 <input id="f_branch" type="text" size="10" oninput="dirty()" /></label></div>
+<div class="row"><label>代理（空=直连） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" oninput="dirty()" /></label></div>
+<div class="row"><label>监听地址 <input id="f_bind" type="text" oninput="dirty()" /></label>
+<label>Token <input id="f_token" type="text" oninput="dirty()" /></label></div>
 <div class="row"><label>API 基地址列表</label></div>
 <div id="apis"></div>
-<div class="row"><input id="newapi" class="wide" type="text" placeholder="https://..." /><button onclick="addApi()">添加</button></div>
+<div class="row"><input id="newapi" class="wide" type="text" placeholder="https://..." /><button onclick="addApi(this)">添加</button></div>
 <div class="row">
-<label><input id="f_commit" type="checkbox" /> 开机自动提交+拉起</label>
-<label><input id="f_takeover" type="checkbox" /> 接管实例开机自启</label>
+<label><input id="f_commit" type="checkbox" onchange="dirty()" /> 开机自动提交+拉起</label>
+<label><input id="f_takeover" type="checkbox" onchange="dirty()" /> 接管实例开机自启</label>
 </div>
-<div class="row"><button onclick="saveConfig()">保存配置</button><span id="savemsg" class="note"></span></div>
+<div class="row"><button onclick="saveConfig(this)">保存配置</button><span id="savemsg" class="note"></span></div>
 </div>
 <h2>本程序开机自启（计划任务）</h2>
 <div class="card"><div class="row">
-<button onclick="loadAutostart()">查询状态</button>
-<button onclick="autostart('enable')">注册开机自启</button>
-<button class="danger" onclick="autostart('disable')">取消开机自启</button>
+<button onclick="loadAutostart(this)">查询状态</button>
+<button onclick="autostart(this,true)">注册开机自启</button>
+<button class="danger" onclick="autostart(this,false)">取消开机自启</button>
 <span id="asstat" class="pill idle">?</span></div>
 <div id="asdetail" class="mono note"></div></div>
-<h2>日志</h2>
+<h2>日志（所有操作结果都会先弹横幅，同时记在这里）</h2>
 <div id="log"></div>
 <script>
-let TOKEN = localStorage.getItem("fleet_token") || "";
+var TOKEN = localStorage.getItem("fleet_token") || "";
 document.getElementById("token").value = TOKEN;
-let CFG = null;
-function saveToken(){ TOKEN = document.getElementById("token").value; localStorage.setItem("fleet_token", TOKEN); connect(); }
-function hdr(){ const h = {"content-type":"application/json"}; if (TOKEN) h["x-token"] = TOKEN; return h; }
-function log(t){ const el=document.getElementById("log"); el.textContent += t + "\n"; el.scrollTop = el.scrollHeight; }
-async function api(path, method, body, cb){
-  try {
-    const r = await fetch(path, {method: method, headers: hdr(), body: body ? JSON.stringify(body) : undefined});
-    const t = await r.text();
-    if(!r.ok){ log("HTTP "+r.status+" "+t); return null; }
-    if(cb){ try{ cb(JSON.parse(t)); }catch(e){ log(t); } }
-    return t;
-  } catch(e){ log("ERR "+e); return null; }
+var CFG = null;
+var es = null;
+var toastTimer = 0;
+function setBusy(on){ var b=document.getElementById("busy"); b.textContent = on ? "执行中…" : "空闲"; b.className = "pill " + (on ? "bad" : "idle"); }
+function toast(msg, ok){
+  var t=document.getElementById("toast");
+  t.textContent = (ok ? "成功： " : "失败： ") + msg;
+  t.className = "show " + (ok ? "ok" : "err");
+  log("[" + (ok ? "OK" : "FAIL") + "] " + msg);
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.className=""; }, ok ? 4000 : 12000);
 }
-function post(p){ api(p, "POST", null, function(t){ log(t); }); }
-function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function log(t){ var el=document.getElementById("log"); el.textContent += t + "\n"; el.scrollTop = el.scrollHeight; }
+function hdr(){ var h={"content-type":"application/json"}; if(TOKEN) h["x-token"]=TOKEN; return h; }
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
 function pill(ok, txt){ return "<span class=\"pill "+(ok?"ok":"bad")+"\">"+esc(txt)+"</span>"; }
-function loadInstances(){ api("/api/instances", "GET", null, function(list){
+async function api(path, method, body){
+  setBusy(true);
+  try {
+    var r = await fetch(path, {method: method, headers: hdr(), body: body ? JSON.stringify(body) : undefined});
+    var t = await r.text();
+    var j = null; try{ j = JSON.parse(t); }catch(e){}
+    if(!r.ok) return {ok:false, status:r.status, text:t, json:j};
+    return {ok:true, status:r.status, text:t, json:j};
+  } catch(e){ return {ok:false, status:0, text:String(e), json:null}; }
+  finally { setBusy(false); }
+}
+async function withBtn(btn, fn){
+  if(btn){ var old=btn.textContent; btn.disabled=true; btn.textContent="执行中…"; }
+  try { await fn(); } finally { if(btn){ btn.disabled=false; btn.textContent=old; } }
+}
+function markDirty(){ document.getElementById("dirtytag").style.display="inline-block"; }
+function clearDirty(){ document.getElementById("dirtytag").style.display="none"; }
+function dirty(){ markDirty(); }
+function saveToken(btn){ withBtn(btn, async function(){ TOKEN=document.getElementById("token").value; localStorage.setItem("fleet_token", TOKEN); connect(); toast("Token 已保存并重连日志流", true); }); }
+function loadInstances(btn){ withBtn(btn, async function(){
+  var r = await api("/api/instances", "GET");
+  if(!r.ok){ document.getElementById("instances").innerHTML="<tr><td colspan=\"6\">加载失败："+esc(r.text)+"</td></tr>"; toast("刷新实例失败（HTTP "+r.status+"）："+r.text, false); return; }
+  var list = r.json || [];
   document.getElementById("instances").innerHTML = list.map(function(i){
     return "<tr><td class=\"mono\">"+esc(i.dir)+"</td><td class=\"mono\">"+esc(i.exe_version_raw)+"</td><td>"+esc(i.channel)+"</td><td class=\"mono\">"+esc(i.resource_time||"-")+"</td><td>"+(i.running?pill(true,"运行中"):pill(false,"stopped"))+"</td><td class=\"mono\">"+esc(i.pending_package||"-")+"</td></tr>";
-  }).join("");
+  }).join("") || "<tr><td colspan=\"6\" class=\"note\">未发现实例：检查搜索根目录</td></tr>";
+  toast("刷新实例完成，共 "+list.length+" 个", true);
 }); }
-function loadPlan(){ api("/api/plan", "GET", null, function(p){ log("plan: " + JSON.stringify(p, null, 1)); }); }
-function runPrepare(force){ api("/api/prepare", "POST", {force_full: force}, function(t){ log(t); }); }
+function loadPlan(btn){ withBtn(btn, async function(){
+  var r = await api("/api/plan", "GET");
+  if(!r.ok){ toast("查看计划失败（HTTP "+r.status+"）："+r.text, false); return; }
+  log("plan: " + JSON.stringify(r.json, null, 1));
+  toast("计划已输出到日志", true);
+}); }
+function runPrepare(btn, force){ withBtn(btn, async function(){
+  var r = await api("/api/prepare", "POST", {force_full: force});
+  if(!r.ok){ toast("准备任务启动失败（HTTP "+r.status+"）："+r.text, false); return; }
+  toast("准备任务已启动，进度看日志流", true);
+}); }
+function doPost(btn, path){ withBtn(btn, async function(){
+  var r = await api(path, "POST");
+  if(!r.ok){ toast("请求失败（HTTP "+r.status+"）："+r.text, false); return; }
+  toast("已接受，结果看日志流", true);
+}); }
 function renderList(el, items, del){
   document.getElementById(el).innerHTML = items.map(function(v, i){
-    return "<div class=\"listitem\"><span class=\"mono\">"+esc(v)+"</span><button onclick=\""+del+"("+i+")\">删除</button></div>";
+    return "<div class=\"listitem\"><span class=\"mono\">"+esc(v)+"</span><button onclick=\""+del+"(this,"+i+")\">删除</button></div>";
   }).join("");
 }
-function delRoot(i){ CFG.search_roots.splice(i,1); renderList("roots", CFG.search_roots, "delRoot"); }
-function addRoot(){ const v=document.getElementById("newroot").value.trim(); if(!v) return; CFG.search_roots.push(v); document.getElementById("newroot").value=""; renderList("roots", CFG.search_roots, "delRoot"); }
-function delApi(i){ CFG.maa_api_bases.splice(i,1); renderList("apis", CFG.maa_api_bases, "delApi"); }
-function addApi(){ const v=document.getElementById("newapi").value.trim(); if(!v) return; CFG.maa_api_bases.push(v); document.getElementById("newapi").value=""; renderList("apis", CFG.maa_api_bases, "delApi"); }
-function loadConfig(){ api("/api/config", "GET", null, function(c){
-  CFG = c;
-  document.getElementById("f_max_depth").value = c.max_depth;
-  document.getElementById("f_stagger").value = c.launch_stagger_secs;
-  document.getElementById("f_autoprep").value = c.auto_prepare_hours;
-  document.getElementById("f_staging").value = c.staging_dir;
-  document.getElementById("f_repo").value = c.resource_repo;
-  document.getElementById("f_branch").value = c.resource_branch;
-  document.getElementById("f_proxy").value = c.proxy;
-  document.getElementById("f_bind").value = c.web_bind;
-  document.getElementById("f_token").value = c.auth_token;
-  document.getElementById("f_commit").checked = c.commit_on_startup;
-  document.getElementById("f_takeover").checked = c.takeover_autostart;
-  renderList("roots", c.search_roots, "delRoot");
-  renderList("apis", c.maa_api_bases, "delApi");
+function delRoot(btn, i){ withBtn(btn, async function(){ CFG.search_roots.splice(i,1); renderList("roots", CFG.search_roots, "delRoot"); markDirty(); }); }
+function addRoot(btn){ withBtn(btn, async function(){ var v=document.getElementById("newroot").value.trim(); if(!v){ toast("先填写路径", false); return; } CFG.search_roots.push(v); document.getElementById("newroot").value=""; renderList("roots", CFG.search_roots, "delRoot"); markDirty(); toast("已加入待保存（记得点保存配置）", true); }); }
+function delApi(btn, i){ withBtn(btn, async function(){ CFG.maa_api_bases.splice(i,1); renderList("apis", CFG.maa_api_bases, "delApi"); markDirty(); }); }
+function addApi(btn){ withBtn(btn, async function(){ var v=document.getElementById("newapi").value.trim(); if(!v){ toast("先填写地址", false); return; } CFG.maa_api_bases.push(v); document.getElementById("newapi").value=""; renderList("apis", CFG.maa_api_bases, "delApi"); markDirty(); toast("已加入待保存（记得点保存配置）", true); }); }
+function loadConfig(btn){ withBtn(btn, async function(){
+  var r = await api("/api/config", "GET");
+  if(!r.ok){ toast("加载配置失败（HTTP "+r.status+"）："+r.text+"。若刚改了 token，先在顶部 Token 框同步", false); return; }
+  CFG = r.json;
+  document.getElementById("f_max_depth").value = CFG.max_depth;
+  document.getElementById("f_stagger").value = CFG.launch_stagger_secs;
+  document.getElementById("f_autoprep").value = CFG.auto_prepare_hours;
+  document.getElementById("f_staging").value = CFG.staging_dir;
+  document.getElementById("f_repo").value = CFG.resource_repo;
+  document.getElementById("f_branch").value = CFG.resource_branch;
+  document.getElementById("f_proxy").value = CFG.proxy;
+  document.getElementById("f_bind").value = CFG.web_bind;
+  document.getElementById("f_token").value = CFG.auth_token;
+  document.getElementById("f_commit").checked = CFG.commit_on_startup;
+  document.getElementById("f_takeover").checked = CFG.takeover_autostart;
+  renderList("roots", CFG.search_roots, "delRoot");
+  renderList("apis", CFG.maa_api_bases, "delApi");
+  clearDirty();
+  document.getElementById("cfgwarn").textContent = "";
 }); }
-function saveConfig(){
+function collectConfig(){
   CFG.max_depth = parseInt(document.getElementById("f_max_depth").value, 10);
   CFG.launch_stagger_secs = parseInt(document.getElementById("f_stagger").value, 10);
   CFG.auto_prepare_hours = parseInt(document.getElementById("f_autoprep").value, 10);
@@ -137,23 +184,41 @@ function saveConfig(){
   CFG.auth_token = document.getElementById("f_token").value;
   CFG.commit_on_startup = document.getElementById("f_commit").checked;
   CFG.takeover_autostart = document.getElementById("f_takeover").checked;
-  api("/api/config", "POST", CFG, function(r){
-    const o = JSON.parse(r);
-    document.getElementById("savemsg").textContent = o.restart_needed ? "已保存，监听地址变了，需重启本程序" : "已保存，即时生效";
-    if (o.restart_needed) { document.getElementById("cfgwarn").textContent = "监听地址已改，重启后生效"; }
-  });
 }
-function loadAutostart(){ api("/api/autostart", "GET", null, function(s){
-  const el = document.getElementById("asstat");
-  el.textContent = s.registered ? "已注册" : "未注册";
-  el.className = "pill " + (s.registered ? "ok" : "idle");
-  document.getElementById("asdetail").textContent = s.detail || "";
+function saveConfig(btn){ withBtn(btn, async function(){
+  if(!CFG){ toast("配置尚未加载，先点保存旁边的重载", false); await loadConfig(); return; }
+  collectConfig();
+  var r = await api("/api/config", "POST", CFG);
+  if(!r.ok){ toast("保存失败（HTTP "+r.status+"）："+r.text, false); return; }
+  clearDirty();
+  document.getElementById("savemsg").textContent = "";
+  if(r.json && r.json.restart_needed){ document.getElementById("cfgwarn").textContent = "监听地址已改，需重启本程序"; toast("已保存，但监听地址变更需重启本程序", true); }
+  else toast("配置已保存，即时生效", true);
+  if(CFG.auth_token !== TOKEN){ document.getElementById("cfgwarn").textContent = "Token 已变更：请同步到顶部 Token 框并保存，否则后续请求会 401"; }
 }); }
-function autostart(a){ api("/api/autostart", "POST", {action: a}, function(){ loadAutostart(); }); }
+function loadAutostart(btn){ withBtn(btn, async function(){
+  var r = await api("/api/autostart", "GET");
+  if(!r.ok){ toast("查询开机自启失败（HTTP "+r.status+"）："+r.text, false); return; }
+  var el = document.getElementById("asstat");
+  el.textContent = r.json.registered ? "已注册" : "未注册";
+  el.className = "pill " + (r.json.registered ? "ok" : "idle");
+  document.getElementById("asdetail").textContent = r.json.detail || "";
+  toast("开机自启状态：" + (r.json.registered ? "已注册" : "未注册"), true);
+}); }
+function autostart(btn, on){ withBtn(btn, async function(){
+  var r = await api("/api/autostart", "POST", {action: on ? "enable" : "disable"});
+  if(!r.ok){ toast((on ? "注册" : "取消") + "失败（HTTP "+r.status+"）："+r.text, false); return; }
+  toast((on ? "注册" : "取消") + "成功：" + ((r.json && r.json.msg) || ""), true);
+  loadAutostart();
+}); }
+var esFailNotified = false;
 function connect(){
-  fetch("/api/health").then(function(r){ return r.text(); }).then(function(t){ document.getElementById("health").textContent=t; document.getElementById("health").className="pill ok"; }).catch(function(){ document.getElementById("health").textContent="offline"; });
-  const es = new EventSource("/events?token="+encodeURIComponent(TOKEN));
-  es.onmessage = function(e){ try{ const o=JSON.parse(e.data); log("["+o.level+"] "+o.msg); }catch(_){ log(e.data); } };
+  if(es){ try{ es.close(); }catch(e){} es = null; }
+  fetch("/api/health").then(function(r){ return r.text(); }).then(function(t){ document.getElementById("health").textContent=t; document.getElementById("health").className="pill ok"; }).catch(function(){ document.getElementById("health").textContent="offline"; document.getElementById("health").className="pill bad"; });
+  es = new EventSource("/events?token="+encodeURIComponent(TOKEN));
+  esFailNotified = false;
+  es.onmessage = function(e){ try{ var o=JSON.parse(e.data); log("["+o.level+"] "+o.msg); }catch(_){ log(e.data); } };
+  es.onerror = function(){ document.getElementById("health").textContent="log-stream down"; if(!esFailNotified){ esFailNotified=true; toast("日志流断开（token 错误或服务不可达），检查顶部 Token", false); } };
 }
 connect(); loadInstances(); loadConfig(); loadAutostart();
 </script>
