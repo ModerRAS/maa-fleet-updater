@@ -1,0 +1,20 @@
+{
+  "search_roots": [
+    "D:/MAA"
+  ],
+  "max_depth": 4,
+  "staging_dir": "C:\\WorkSpace\\Rust\\maa-fleet-updater\\./staging",
+  "resource_repo": "https://github.com/MaaAssistantArknights/MaaResource",
+  "resource_branch": "main",
+  "maa_api_bases": [
+    "https://api.maa.plus/MaaAssistantArknights/api/",
+    "https://api2.maa.plus/MaaAssistantArknights/api/"
+  ],
+  "proxy": "",
+  "commit_on_startup": true,
+  "takeover_autostart": true,
+  "web_bind": "127.0.0.1:38080",
+  "auth_token": "",
+  "launch_stagger_secs": 5,
+  "auto_prepare_hours": 6
+}

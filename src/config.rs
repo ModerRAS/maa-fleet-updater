@@ -93,13 +93,7 @@ impl Config {
             .map_err(|e| format!("read config {}: {e}", path.display()))?;
         let mut cfg: Config =
             serde_json::from_str(&text).map_err(|e| format!("parse config: {e}"))?;
-        if cfg.staging_dir.is_relative() {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    cfg.staging_dir = parent.join(&cfg.staging_dir);
-                }
-            }
-        }
+        cfg.resolve_staging(path);
         Ok(cfg)
     }
 
@@ -108,7 +102,8 @@ impl Config {
     /// the daemon always starts; problems are reported, not fatal.
     pub fn load_or_create(path: &Path) -> (Self, Option<String>) {
         if !path.exists() {
-            let cfg = Config::default();
+            let mut cfg = Config::default();
+            cfg.resolve_staging(path);
             match cfg.save_to(path) {
                 Ok(()) => {
                     return (
@@ -137,7 +132,8 @@ impl Config {
                         .unwrap_or(0)
                 ));
                 let _ = std::fs::rename(path, &bak);
-                let cfg = Config::default();
+                let mut cfg = Config::default();
+                cfg.resolve_staging(path);
                 let _ = cfg.save_to(path);
                 (
                     cfg,
@@ -150,14 +146,35 @@ impl Config {
         }
     }
 
-    pub fn save_to(&self, path: &Path) -> Result<(), String> {
+    /// Resolve a relative staging dir against the config file location,
+    /// so runtime paths never depend on the process working directory
+    /// (Task Scheduler defaults CWD to System32).
+    pub fn resolve_staging(&mut self, path: &Path) {
+        // Drop a leading "./" so the joined path stays clean for display.
+        if let Some(s) = self.staging_dir.to_str() {
+            if let Some(rest) = s.strip_prefix("./").or_else(|| s.strip_prefix(".\\")) {
+                self.staging_dir = PathBuf::from(rest);
+            }
+        }
+        if self.staging_dir.is_relative() {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    self.staging_dir = parent.join(&self.staging_dir);
+                }
+            }
+        }
+    }
+
+    pub fn save_to(&mut self, path: &Path) -> Result<(), String> {
+        self.resolve_staging(path);
+        let this = &*self;
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|e| format!("mkdir config dir: {e}"))?;
             }
         }
         let text =
-            serde_json::to_string_pretty(self).map_err(|e| format!("serialize config: {e}"))?;
+            serde_json::to_string_pretty(this).map_err(|e| format!("serialize config: {e}"))?;
         let tmp = path.with_extension("new");
         std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("write tmp config: {e}"))?;
         std::fs::rename(&tmp, path).map_err(|e| format!("replace config: {e}"))?;

@@ -47,6 +47,8 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <label><input id="autoref" type="checkbox" checked /> 每 15 秒自动刷新</label></div>
 <div class="row" id="dash" style="gap:24px"></div>
 <div class="note" id="lastruns"></div></div>
+<h2>环境自检（建不了文件夹 / 下不了包先点这个）</h2>
+<div class="card"><div class="row"><button onclick="preflight(this)">检查环境</button></div><div id="envout" class="mono note">未检查</div></div>
 <div class="step" id="step1"><h2>步骤 1：准备（可联网，任何时候都能做）</h2>
 <div class="note">查版本 → 下 OTA/完整包（GitHub 直链走代理）→ 中央资源库 git pull。全部落盘到中转目录，不碰任何实例。</div>
 <div class="row"><label><input id="forcefull" type="checkbox" /> 强制完整包（默认 OTA，有人掉版本时才勾）</label></div>
@@ -269,6 +271,15 @@ function saveConfig(btn){ withBtn(btn, async function(){
   if(r.json && r.json.restart_needed){ document.getElementById("cfgwarn").textContent = "监听地址已改，需重启本程序"; toast("已保存，但监听地址变更需重启本程序", true); }
   else toast("配置已保存，即时生效", true);
   if(CFG.auth_token !== TOKEN){ document.getElementById("cfgwarn").textContent = "Token 已变更：请同步到顶部 Token 框并保存，否则后续请求会 401"; }
+}); }
+function preflight(btn){ withBtn(btn, async function(){
+  var r = await api("/api/preflight", "GET");
+  if(!r.ok){ toast("自检失败（HTTP "+r.status+"）："+r.text, false); return; }
+  var d = r.json;
+  var html = "程序: " + esc(d.exe) + "<br/>git: " + esc(d.git) + "<br/>中转目录: " + esc(d.staging) + " → " + (d.staging_writable ? "可写" : "<b>不可写</b>") + "<br/>" + esc(d.staging_msg || "");
+  if(d.disks){ html += "<br/>磁盘: " + d.disks.map(function(x){ return esc(x.mount) + " 可用 " + Number(x.avail_gb).toFixed(1) + "G / 共 " + Number(x.total_gb).toFixed(1) + "G"; }).join("; "); }
+  document.getElementById("envout").innerHTML = html;
+  toast(d.staging_writable ? "环境自检完成" : "中转目录不可写，看上面详情（常见原因：计划任务 CWD、受控文件夹访问、杀软）", !!d.staging_writable);
 }); }
 function loadAutostart(btn){ withBtn(btn, async function(){
   var r = await api("/api/autostart", "GET");

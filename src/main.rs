@@ -90,7 +90,7 @@ async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn save_config(
     State(state): State<AppState>,
-    Json(new_cfg): Json<config::Config>,
+    Json(mut new_cfg): Json<config::Config>,
 ) -> impl IntoResponse {
     if let Err(e) = new_cfg.validate() {
         return (StatusCode::BAD_REQUEST, e).into_response();
@@ -102,6 +102,53 @@ async fn save_config(
     let restart = state.inner.cfg.read().await.web_bind != new_cfg.web_bind;
     *state.inner.cfg.write().await = new_cfg;
     Json(serde_json::json!({"saved": true, "restart_needed": restart})).into_response()
+}
+
+async fn preflight(State(state): State<AppState>) -> impl IntoResponse {
+    let cfg = state.inner.cfg.read().await.clone();
+    let r = tokio::task::spawn_blocking(move || {
+        let git = match std::process::Command::new("git").arg("--version").output() {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Ok(o) => format!("FAILED: {}", String::from_utf8_lossy(&o.stderr).trim()),
+            Err(e) => format!("NOT FOUND: {e}"),
+        };
+        let (staging_ok, staging_msg) = match std::fs::create_dir_all(&cfg.staging_dir) {
+            Err(e) => (false, format!("mkdir {}: {e}", cfg.staging_dir.display())),
+            Ok(()) => {
+                let probe = cfg.staging_dir.join(".write-test");
+                match std::fs::write(&probe, b"ok") {
+                    Err(e) => (false, format!("write {}: {e}", probe.display())),
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(&probe);
+                        (true, format!("writable: {}", cfg.staging_dir.display()))
+                    }
+                }
+            }
+        };
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        let mut ds = Vec::new();
+        for d in disks.iter() {
+            ds.push(serde_json::json!({
+                "mount": d.mount_point().to_string_lossy(),
+                "total_gb": d.total_space() as f64 / 1e9,
+                "avail_gb": d.available_space() as f64 / 1e9,
+            }));
+        }
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        serde_json::json!({
+            "exe": exe,
+            "git": git,
+            "staging": cfg.staging_dir.to_string_lossy(),
+            "staging_writable": staging_ok,
+            "staging_msg": staging_msg,
+            "disks": ds,
+        })
+    })
+    .await
+    .unwrap_or(serde_json::json!({"error": "preflight task failed"}));
+    Json(r)
 }
 
 async fn autostart_status() -> impl IntoResponse {
@@ -549,6 +596,11 @@ async fn main() {
     if let Some(note) = cfg_note {
         tracing::warn!("{note}");
     }
+    tracing::info!(
+        "config: {} staging: {}",
+        cfg_path.display(),
+        cfg.staging_dir.display()
+    );
     let state = AppState {
         inner: Arc::new(Inner {
             cfg_path: cfg_path.clone(),
@@ -586,6 +638,7 @@ async fn main() {
         .route("/api/instances", get(instances))
         .route("/api/plan", get(plan))
         .route("/api/status", get(status))
+        .route("/api/preflight", get(preflight))
         .route("/api/prepare", post(prepare))
         .route("/api/commit", post(commit))
         .route("/api/launch", post(launch))
