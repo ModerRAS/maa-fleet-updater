@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAA Fleet Updater</title>
+<style>
+body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;background:#0f141b;color:#dbe4ee}
+h1{font-size:20px}h2{font-size:16px;margin-top:28px}
+button{background:#2b6cb0;color:#fff;border:0;border-radius:6px;padding:8px 16px;margin-right:8px;cursor:pointer}
+button:disabled{opacity:.5}button.warn{background:#975a16}
+table{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+th,td{border:1px solid #2d3748;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#1a202c}.mono{font-family:Consolas,monospace;font-size:12px;word-break:break-all}
+#log{background:#000;border-radius:8px;padding:12px;height:320px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input{background:#1a202c;border:1px solid #2d3748;color:#dbe4ee;border-radius:6px;padding:7px 10px}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px}
+.ok{background:#22543d}.bad{background:#742a2a}.idle{background:#2d3748}
+</style></head>
+<body>
+<h1>MAA Fleet Updater</h1>
+<div class="row">
+<label>Token <input id="token" type="password" size="20" placeholder="auth token" /></label>
+<button onclick="saveToken()">保存 Token</button>
+<span id="health" class="pill idle">?</span>
+</div>
+<h2>实例</h2>
+<div class="row"><button onclick="api('/api/instances','GET',renderInstances)">刷新实例</button>
+<button onclick="api('/api/plan','GET',renderPlan)">查看计划</button></div>
+<table><thead><tr><th>目录</th><th>版本</th><th>通道</th><th>资源时间</th><th>运行</th><th>待装包</th></tr></thead>
+<tbody id="instances"></tbody></table>
+<h2>流水线</h2>
+<div class="row">
+<button onclick="runPrepare(false)">准备（OTA 优先）</button>
+<button class="warn" onclick="runPrepare(true)">准备（强制完整包）</button>
+<button onclick="api('/api/commit','POST')">提交+拉起（开机阶段）</button>
+<button onclick="api('/api/launch','POST')">仅拉起</button>
+</div>
+<p>准备阶段联网（查版本/下载/GitHub 直链走代理）；提交阶段零网络请求；拉起是最后一步，失败也不阻塞。</p>
+<h2>日志</h2>
+<div id="log"></div>
+<script>
+let TOKEN = localStorage.getItem('fleet_token') || '';
+document.getElementById('token').value = TOKEN;
+function saveToken(){ TOKEN = document.getElementById('token').value; localStorage.setItem('fleet_token', TOKEN); connect(); }
+function hdr(){ return TOKEN ? {'x-token': TOKEN} : {}; }
+function log(t){ const el=document.getElementById('log'); el.textContent += t + '\n'; el.scrollTop = el.scrollHeight; }
+async function api(path, method, cb){
+  try {
+    const r = await fetch(path, {method, headers: Object.assign({'content-type':'application/json'}, hdr())});
+    const t = await r.text();
+    if(!r.ok){ log('HTTP '+r.status+' '+t); return; }
+    if(cb){ try{ cb(JSON.parse(t)); }catch(e){ log(t); } }
+    else log(t);
+  } catch(e){ log('ERR '+e); }
+}
+function pill(ok, txt){ return '<span class="pill '+(ok?'ok':'bad')+'">'+txt+'</span>'; }
+function renderInstances(list){
+  const tb = document.getElementById('instances');
+  tb.innerHTML = list.map(i => '<tr><td class="mono">'+i.dir+'</td><td class="mono">'+i.exe_version_raw+'</td><td>'+i.channel+'</td><td class="mono">'+(i.resource_time||'-')+'</td><td>'+(i.running?pill(true,'运行中'):pill(false,' stopped'))+'</td><td class="mono">'+(i.pending_package||'-')+'</td></tr>').join('');
+}
+function renderPlan(p){ log('plan: ' + JSON.stringify(p, null, 1)); }
+async function runPrepare(force){
+  await fetch('/api/prepare', {method:'POST', headers: Object.assign({'content-type':'application/json'}, hdr()), body: JSON.stringify({force_full: force})});
+}
+function connect(){
+  fetch('/api/health').then(r=>r.text()).then(t=>{ document.getElementById('health').textContent=t; document.getElementById('health').className='pill ok'; }).catch(()=>{ document.getElementById('health').textContent='offline'; });
+  const es = new EventSource('/events?token='+encodeURIComponent(TOKEN));
+  es.onmessage = e => { try{ const o=JSON.parse(e.data); log('['+o.level+'] '+o.msg); }catch(_){ log(e.data); } };
+}
+connect(); api('/api/instances','GET',renderInstances);
+</script>
+</body></html>
