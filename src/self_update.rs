@@ -239,7 +239,7 @@ async fn fetch_best(
             Err(e) => errors.push(format!("{f}: {e}")),
         }
     }
-    Err(errors.join("; ".into()))
+    Err(errors.join("; "))
 }
 
 async fn fetch_release(
