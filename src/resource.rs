@@ -131,16 +131,71 @@ pub fn merge_into(
             version_file = Some(src);
             continue;
         }
-        let dst = instance_dir.join(rel);
+        let dst = instance_dir.join("resource").join(rel);
         crate::fsutil::ensure_parent(&dst, "resource file")?;
         std::fs::copy(&src, &dst).map_err(|e| format!("copy {}: {e}", rel.display()))?;
         n += 1;
     }
     if let Some(src) = version_file {
-        std::fs::copy(&src, instance_dir.join("version.json"))
+        std::fs::copy(&src, instance_dir.join("resource").join("version.json"))
             .map_err(|e| format!("copy version.json: {e}"))?;
         n += 1;
     }
     let _ = tx;
     Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_targets_resource_subdir() {
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "maa-fleet-ut-res-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        // central_res == <repo>/resource
+        let central = root.join("central");
+        std::fs::create_dir_all(central.join("tasks")).unwrap();
+        std::fs::write(
+            central.join("version.json"),
+            r#"{"last_updated":"2026-01-01 00:00:00.000"}"#,
+        )
+        .unwrap();
+        std::fs::write(central.join("tasks").join("a.json"), "{}").unwrap();
+        let inst = root.join("inst");
+        std::fs::create_dir_all(inst.join("resource")).unwrap();
+        std::fs::write(
+            inst.join("resource").join("version.json"),
+            r#"{"last_updated":"2020-01-01 00:00:00.000"}"#,
+        )
+        .unwrap();
+        let (tx, _rx) = broadcast::channel(16);
+        let n = merge_into(&central, &inst, &tx).unwrap();
+        assert_eq!(n, 2, "expected payload + version.json");
+        assert!(
+            inst.join("resource").join("tasks").join("a.json").is_file(),
+            "payload must land under resource/"
+        );
+        assert!(
+            !inst.join("tasks").join("a.json").exists(),
+            "must not pollute instance root"
+        );
+        assert!(
+            !inst.join("version.json").exists(),
+            "version.json must not be copied to instance root"
+        );
+        let updated = std::fs::read_to_string(inst.join("resource").join("version.json")).unwrap();
+        assert!(
+            updated.contains("2026"),
+            "resource/version.json not advanced: {updated}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
