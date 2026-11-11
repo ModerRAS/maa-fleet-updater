@@ -15,6 +15,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build release
         run: cargo build --release
+        env:
+          MAA_FLEET_GIT_SHA: ${{ github.sha }}
       - name: Package
         shell: pwsh
         run: |
@@ -23,7 +25,9 @@ jobs:
           Copy-Item target/release/maa-fleet-updater.exe dist/
           Copy-Item config.example.json, README.md, LICENSE dist/
           Compress-Archive -Path dist/* -DestinationPath maa-fleet-updater-win-x64.zip -Force
+          $hash = (Get-FileHash maa-fleet-updater-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  maa-fleet-updater-win-x64.zip`n" | Out-File -FilePath maa-fleet-updater-win-x64.zip.sha256 -Encoding ascii -NoNewline
       - name: Create GitHub release
-        run: gh release create ${{ github.ref_name }} maa-fleet-updater-win-x64.zip --generate-notes
+        run: gh release create ${{ github.ref_name }} maa-fleet-updater-win-x64.zip maa-fleet-updater-win-x64.zip.sha256 --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

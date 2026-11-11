@@ -82,6 +82,11 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <div class="row"><input id="newapi" class="wide" type="text" placeholder="https://" /><button onclick="addApi(this)">添加</button></div>
 <div class="row"><label>拉起间隔秒（错开 IO） <input id="f_stagger" class="num" type="number" min="0" max="300" oninput="dirty()" /></label>
 <label>自动准备小时（0=关） <input id="f_autoprep" class="num" type="number" min="0" max="168" oninput="dirty()" /></label></div>
+<h3>本程序自更新</h3>
+<div class="row"><label>自更新检查小时（0=关） <input id="f_su_hours" class="num" type="number" min="0" max="168" oninput="dirty()" /></label>
+<label><input id="f_suauto" type="checkbox" onchange="dirty()" /> 发现新构建自动更新并重启</label></div>
+<div class="row"><label>自更新源（空=官方 GitHub Release） <input id="f_sufeed" class="wide" type="text" placeholder="https://" oninput="dirty()" /></label></div>
+
 <h3>开机行为</h3>
 <div class="row">
 <label><input id="f_commit" type="checkbox" onchange="dirty()" /> 开机自动提交+拉起</label>
@@ -99,6 +104,13 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <button class="danger" onclick="autostart(this,false)">取消开机自启</button>
 <span id="asstat" class="pill idle">?</span></div>
 <div id="asdetail" class="mono note"></div></div>
+<h2>本程序自更新</h2>
+<div class="card"><div class="row">
+<button onclick="suCheck(this)">检查更新</button>
+<button onclick="suApply(this)">更新并重启</button>
+<span id="sustat" class="pill idle">?</span></div>
+<div id="suver" class="mono note">未加载</div>
+<div class="note">默认每 6 小时查一次 GitHub Release；有新构建且自动应用开着就自己下载、重启。开发目录（target/）下只提示不自动换。换监听地址后重启才生效那类配置不受影响。</div></div>
 <h2>日志</h2>
 <div class="row"><button onclick="clearLog(this)">清空</button><label><input id="pause" type="checkbox" /> 暂停滚动</label></div>
 <div id="log"></div>
@@ -147,7 +159,7 @@ function refreshAll(btn){ withBtn(btn, async function(){
   var r = await api("/api/status", "GET");
   if(!r.ok){ toast("刷新状态失败（HTTP "+r.status+"）："+r.text, false); return; }
   STATUS = r.json;
-  renderDash(); renderInstances(); renderPlan(); renderLast(); renderAutostart();
+  renderDash(); renderInstances(); renderPlan(); renderLast(); renderAutostart(); renderSelfUpdate();
   document.getElementById("firstrun").style.display = ((STATUS.instances||[]).length===0) ? "block" : "none";
 }); }
 function kindLabel(k){ if(k==="ota") return "OTA 增量"; if(k==="full") return "完整包"; return "无"; }
@@ -235,6 +247,9 @@ function loadConfig(btn){ withBtn(btn, async function(){
   document.getElementById("f_max_depth").value = CFG.max_depth;
   document.getElementById("f_stagger").value = CFG.launch_stagger_secs;
   document.getElementById("f_autoprep").value = CFG.auto_prepare_hours;
+  document.getElementById("f_su_hours").value = CFG.self_update_hours;
+  document.getElementById("f_suauto").checked = CFG.auto_apply_self_update;
+  document.getElementById("f_sufeed").value = CFG.self_update_feed;
   document.getElementById("f_staging").value = CFG.staging_dir;
   document.getElementById("f_repo").value = CFG.resource_repo;
   document.getElementById("f_branch").value = CFG.resource_branch;
@@ -252,6 +267,9 @@ function collectConfig(){
   CFG.max_depth = parseInt(document.getElementById("f_max_depth").value, 10);
   CFG.launch_stagger_secs = parseInt(document.getElementById("f_stagger").value, 10);
   CFG.auto_prepare_hours = parseInt(document.getElementById("f_autoprep").value, 10);
+  CFG.self_update_hours = parseInt(document.getElementById("f_su_hours").value, 10);
+  CFG.auto_apply_self_update = document.getElementById("f_suauto").checked;
+  CFG.self_update_feed = document.getElementById("f_sufeed").value;
   CFG.staging_dir = document.getElementById("f_staging").value;
   CFG.resource_repo = document.getElementById("f_repo").value;
   CFG.resource_branch = document.getElementById("f_branch").value;
@@ -280,6 +298,24 @@ function preflight(btn){ withBtn(btn, async function(){
   if(d.disks){ html += "<br/>磁盘: " + d.disks.map(function(x){ return esc(x.mount) + " 可用 " + Number(x.avail_gb).toFixed(1) + "G / 共 " + Number(x.total_gb).toFixed(1) + "G"; }).join("; "); }
   document.getElementById("envout").innerHTML = html;
   toast(d.staging_writable ? "环境自检完成" : "中转目录不可写，看上面详情（常见原因：计划任务 CWD、受控文件夹访问、杀软）", !!d.staging_writable);
+}); }
+function renderSelfUpdate(){
+  var su = (STATUS && STATUS.self_update) || {};
+  var el = document.getElementById("sustat");
+  var d = su.decision || "unknown";
+  el.textContent = d === "up_to_date" ? "已是最新" : d === "staged" ? "已暂存待重启" : d === "checking" ? "检查中…" : d === "error" ? "检查失败" : "?";
+  el.className = "pill " + (d === "up_to_date" ? "ok" : d === "staged" || d === "checking" ? "idle" : d === "error" ? "bad" : "idle");
+  document.getElementById("suver").textContent = "当前 v" + (su.current_version || "?") + (su.current_commit ? " (" + su.current_commit.slice(0,7) + ")" : "") + (su.latest ? " → 最新 " + su.latest : "") + (su.last_check_at ? "（" + ftime(su.last_check_at) + "查过）" : "（尚未检查）") + (su.note ? " " + su.note : "");
+}
+function suCheck(btn){ withBtn(btn, async function(){
+  var r = await api("/api/self-update/check", "POST");
+  if(!r.ok){ toast("自更新检查启动失败（HTTP "+r.status+"）："+r.text, false); return; }
+  toast("自更新检查已开始，看日志", true);
+}); }
+function suApply(btn){ withBtn(btn, async function(){
+  var r = await api("/api/self-update/apply", "POST");
+  if(!r.ok){ toast("自更新应用启动失败（HTTP "+r.status+"）："+r.text, false); return; }
+  toast("已开始下载+重启切换，进程退出即正常（稍后刷新页面）", true);
 }); }
 function loadAutostart(btn){ withBtn(btn, async function(){
   var r = await api("/api/autostart", "GET");

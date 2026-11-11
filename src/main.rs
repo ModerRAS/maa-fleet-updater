@@ -6,6 +6,7 @@ mod fsutil;
 mod maa_api;
 mod pe_version;
 mod resource;
+mod self_update;
 mod stage;
 mod state;
 
@@ -37,7 +38,11 @@ struct AppState {
 struct Inner {
     cfg_path: PathBuf,
     cfg: RwLock<config::Config>,
+    /// Serializes prepare / commit / self-update replace: only one of them
+    /// touches instances or this exe at a time.
     prepare_lock: tokio::sync::Mutex<()>,
+    su: RwLock<self_update::SelfUpdateState>,
+    commit_once: bool,
     tx: broadcast::Sender<String>,
 }
 
@@ -81,6 +86,7 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
         "autostart_registered": auto.0,
         "autostart_detail": auto.1,
         "config_path": cfg_path.to_string_lossy(),
+        "self_update": state.inner.su.read().await.clone(),
     }))
 }
 
@@ -237,6 +243,118 @@ async fn launch(State(state): State<AppState>) -> impl IntoResponse {
         .ok();
     });
     Json(serde_json::json!({"started": true}))
+}
+
+async fn self_update_check(State(state): State<AppState>) -> impl IntoResponse {
+    let s = state.clone();
+    tokio::spawn(async move {
+        run_self_update(&s, false).await;
+    });
+    Json(serde_json::json!({"started": true}))
+}
+
+async fn self_update_apply(State(state): State<AppState>) -> impl IntoResponse {
+    let s = state.clone();
+    tokio::spawn(async move {
+        run_self_update(&s, true).await;
+    });
+    Json(serde_json::json!({"started": true}))
+}
+
+async fn set_su(state: &AppState, decision: &str, note: &str, latest: Option<String>) {
+    let mut su = state.inner.su.write().await;
+    su.last_check_at = Some(now_ts());
+    su.decision = decision.to_string();
+    su.note = note.to_string();
+    if latest.is_some() {
+        su.latest = latest;
+    }
+}
+
+/// Self-update check (+ optional apply). Yields while prepare/commit holds the
+/// work lock, and never runs in --commit-once stager mode.
+async fn run_self_update(state: &AppState, manual_apply: bool) {
+    if state.inner.commit_once {
+        return;
+    }
+    let tx = state.inner.tx.clone();
+    let _guard = match state.inner.prepare_lock.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            emit(&tx, "warn", "self-update: 准备或提交正在进行，本轮跳过");
+            return;
+        }
+    };
+    let cfg = state.inner.cfg.read().await.clone();
+    let feed = if cfg.self_update_feed.trim().is_empty() {
+        self_update::DEFAULT_FEED.to_string()
+    } else {
+        cfg.self_update_feed.trim().to_string()
+    };
+    let client = match self_update::build_client(cfg.proxy.trim()) {
+        Ok(c) => c,
+        Err(e) => {
+            set_su(state, "error", &format!("http client: {e}"), None).await;
+            emit(&tx, "error", format!("self-update: {e}"));
+            return;
+        }
+    };
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            set_su(state, "error", &format!("current exe: {e}"), None).await;
+            return;
+        }
+    };
+    set_su(state, "checking", "正在查询最新发布 ...", None).await;
+    let req = self_update::StageRequest {
+        client: &client,
+        feed: &feed,
+        work_dir: &cfg.staging_dir.join("self-update"),
+        install_exe: &exe,
+        events: Some(tx.clone()),
+    };
+    match self_update::stage_release(&req).await {
+        Err(e) => {
+            set_su(state, "error", &e, None).await;
+            emit(&tx, "error", format!("self-update 检查失败: {e}"));
+        }
+        Ok(self_update::StageOutcome::UpToDate { message }) => {
+            set_su(
+                state,
+                "up_to_date",
+                &message,
+                Some(self_update::current_version().to_string()),
+            )
+            .await;
+            emit(&tx, "info", format!("self-update: {message}"));
+        }
+        Ok(self_update::StageOutcome::Staged { path, version }) => {
+            set_su(
+                state,
+                "staged",
+                &format!("v{version} 已就绪，准备重启切换"),
+                Some(version.clone()),
+            )
+            .await;
+            let from_target = self_update::running_from_cargo_target();
+            if manual_apply || (cfg.auto_apply_self_update && !from_target) {
+                emit(&tx, "info", format!("self-update: 重启切换到 v{version}"));
+                let args = self_update::restart_args_for(&state.inner.cfg_path);
+                if let Err(e) = self_update::relaunch_and_exit(&path, &args) {
+                    set_su(state, "error", &e, None).await;
+                    emit(&tx, "error", format!("self-update 重启失败: {e}"));
+                }
+                // relaunch_and_exit exits the process on success.
+            } else {
+                emit(
+                    &tx,
+                    "info",
+                    format!("self-update: v{version} 已暂存（自动应用已关或为开发构建），可在页面上手动应用"),
+                );
+            }
+        }
+    }
 }
 
 async fn events(
@@ -508,6 +626,9 @@ async fn run_prepare(state: &AppState, force_full: bool) {
 /// Commit + launch (zero network): stage files into stopped instances, then launch all.
 async fn run_commit_launch(state: &AppState) {
     let tx = state.inner.tx.clone();
+    // Same work lock as prepare / self-update: never stage instances while a
+    // self-update replace is in flight, and vice versa.
+    let _work = state.inner.prepare_lock.lock().await;
     let cfg = state.inner.cfg.read().await.clone();
     let staging = cfg.staging_dir.clone();
     let plan = load_plan(&cfg);
@@ -582,11 +703,12 @@ fn default_config_path() -> PathBuf {
     PathBuf::from("config.json")
 }
 
-fn parse_args() -> (PathBuf, bool) {
+fn parse_args() -> (PathBuf, bool, bool) {
     // No --config: primary double-click use, anchor next to the exe.
     // Explicit relative --config: classic CLI semantics, resolve against CWD.
     let mut cfg: Option<PathBuf> = None;
     let mut once = false;
+    let mut from_self_update = false;
     let mut explicit = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -597,6 +719,8 @@ fn parse_args() -> (PathBuf, bool) {
             }
         } else if a == "--commit-once" {
             once = true;
+        } else if a == "--from-self-update" {
+            from_self_update = true;
         }
     }
     let mut cfg = cfg.unwrap_or_else(default_config_path);
@@ -606,7 +730,47 @@ fn parse_args() -> (PathBuf, bool) {
     if anchor {
         anchor_to_exe_dir(&mut cfg);
     }
-    (cfg, once)
+    (cfg, once, from_self_update)
+}
+
+struct Replacer {
+    from: PathBuf,
+    to: PathBuf,
+    wait: bool,
+    restart_args: Vec<String>,
+}
+
+/// Hidden replacer-child args (only spawned by relaunch_and_exit).
+/// Any presence routes the process into apply_replacement instead of the daemon.
+fn parse_replacer() -> Option<Replacer> {
+    let mut from: Option<PathBuf> = None;
+    let mut to: Option<PathBuf> = None;
+    let mut wait = false;
+    let mut restart_args = Vec::new();
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        if a == "--replace-from" {
+            from = it.next().map(PathBuf::from);
+        } else if a == "--replace-to" {
+            to = it.next().map(PathBuf::from);
+        } else if a == "--wait-for-parent" {
+            wait = true;
+        } else if a == "--restart-arg" {
+            if let Some(v) = it.next() {
+                restart_args.push(v);
+            }
+        }
+    }
+    if from.is_some() || to.is_some() || wait {
+        Some(Replacer {
+            from: from.unwrap_or_default(),
+            to: to.unwrap_or_default(),
+            wait,
+            restart_args,
+        })
+    } else {
+        None
+    }
 }
 
 /// Every relative path anchors to the executable directory, never CWD.
@@ -636,13 +800,24 @@ fn open_browser_once(bind: &str) {
 
 #[tokio::main]
 async fn main() {
+    // Replacer child (spawned by relaunch_and_exit): swap exe, restart, quit.
+    // Runs before anything else; needs no config or async runtime.
+    if let Some(rep) = parse_replacer() {
+        if let Err(e) =
+            self_update::apply_replacement(&rep.from, &rep.to, rep.wait, &rep.restart_args)
+        {
+            eprintln!("self-update replace failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let (cfg_path, commit_once) = parse_args();
+    let (cfg_path, commit_once, from_self_update) = parse_args();
     let cfg_path = std::fs::canonicalize(&cfg_path).unwrap_or(cfg_path);
     let (cfg, cfg_note) = config::Config::load_or_create(&cfg_path);
     let (tx, _rx) = state::event_bus();
@@ -657,11 +832,27 @@ async fn main() {
         cfg_path.display(),
         cfg.staging_dir.display()
     );
+    if from_self_update {
+        tracing::info!(
+            "restarted by self-update: v{} ({})",
+            self_update::current_version(),
+            self_update::current_commit().unwrap_or("nocommit")
+        );
+    }
+    let su_init = self_update::SelfUpdateState {
+        current_version: self_update::current_version().to_string(),
+        current_commit: self_update::current_commit().map(|s| s.to_string()),
+        decision: "unknown".to_string(),
+        note: "尚未检查".to_string(),
+        ..Default::default()
+    };
     let state = AppState {
         inner: Arc::new(Inner {
             cfg_path: cfg_path.clone(),
             cfg: RwLock::new(cfg),
             prepare_lock: tokio::sync::Mutex::new(()),
+            su: RwLock::new(su_init),
+            commit_once,
             tx,
         }),
     };
@@ -687,6 +878,22 @@ async fn main() {
             }
         });
     }
+    // background self-update check (first round after boot settles)
+    {
+        let s = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            loop {
+                let hours = s.inner.cfg.read().await.self_update_hours;
+                if hours > 0 {
+                    run_self_update(&s, false).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(hours * 3600)).await;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                }
+            }
+        });
+    }
     let bind = state.inner.cfg.read().await.web_bind.clone();
     let app = Router::new()
         .route("/", get(index))
@@ -703,6 +910,8 @@ async fn main() {
             "/api/autostart",
             get(autostart_status).post(autostart_action),
         )
+        .route("/api/self-update/check", post(self_update_check))
+        .route("/api/self-update/apply", post(self_update_apply))
         .route("/events", get(events))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state);

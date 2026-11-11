@@ -34,6 +34,15 @@ fn default_stagger() -> u64 {
 fn default_prepare_hours() -> u64 {
     6
 }
+fn default_self_update_hours() -> u64 {
+    6
+}
+fn default_true_apply() -> bool {
+    true
+}
+fn default_feed() -> String {
+    String::new()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -65,6 +74,16 @@ pub struct Config {
     /// Background prepare interval in hours (check+download+git pull). 0 = off.
     #[serde(default = "default_prepare_hours")]
     pub auto_prepare_hours: u64,
+    /// Self-update check interval in hours. 0 = off.
+    #[serde(default = "default_self_update_hours")]
+    pub self_update_hours: u64,
+    /// When a newer build is found, download it and restart into it.
+    #[serde(default = "default_true_apply")]
+    pub auto_apply_self_update: bool,
+    /// Empty = official GitHub latest release; otherwise a custom JSON feed
+    /// (https, or http on loopback for local testing).
+    #[serde(default = "default_feed")]
+    pub self_update_feed: String,
 }
 
 impl Default for Config {
@@ -83,6 +102,9 @@ impl Default for Config {
             auth_token: String::new(),
             launch_stagger_secs: default_stagger(),
             auto_prepare_hours: default_prepare_hours(),
+            self_update_hours: default_self_update_hours(),
+            auto_apply_self_update: default_true_apply(),
+            self_update_feed: default_feed(),
         }
     }
 }
@@ -213,6 +235,10 @@ impl Config {
         if self.auto_prepare_hours > 168 {
             return Err("auto_prepare_hours must be <= 168".to_string());
         }
+        if self.self_update_hours > 168 {
+            return Err("self_update_hours must be <= 168".to_string());
+        }
+        crate::self_update::validate_feed(self.self_update_feed.trim())?;
         if !self.proxy.trim().is_empty() {
             crate::downloader::build_client(self.proxy.trim()).map(|_| ())?;
         }

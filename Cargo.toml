@@ -22,5 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sysinfo = "0.30"
 semver = "1"
 walkdir = "2"
+zip = "2"
+sha2 = "0.10"
 pelite = "0.10"
 winreg = "0.52"

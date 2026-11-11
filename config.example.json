@@ -10,6 +10,9 @@
   ],
   "proxy": "",
   "commit_on_startup": true,
+  "self_update_hours": 6,
+  "auto_apply_self_update": true,
+  "self_update_feed": "",
   "web_bind": "127.0.0.1:38080",
   "auth_token": "change-me"
 }

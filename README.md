@@ -91,10 +91,27 @@ MAA.Updater.exe 完成安装，和手动点更新是同一条代码路径。
 live 版本检查与大包下载、中央仓库首次克隆、真机重启后的 Updater 接管。
 Debug/本地构建版本（version 读不出）会被跳过应用更新，只同步资源。
 
+## 本程序自更新
+
+常驻进程每 `self_update_hours` 小时（默认 6，0=关）查一次 GitHub Release
+（`self_update_feed` 为空即官方源，可填自建同结构 JSON 做测试）。判定规则
+跟 arknights-auto-update 一致：远端语义版本更高就更；版本相同但两边提
+交号都已知且不同（tag 被移动指向）也更；从不降级；没有可对照的提交
+号时不重复下载。
+
+命中更新后只下载当平台那一个 `maa-fleet-updater-win-x64.zip` 及其 `.sha256`，
+校验通过才解出其中的 `maa-fleet-updater.exe`（zip-slip/绝对路径拒绝，
+MZ 魔数检查），暂存为 exe 旁的 `.new`，再起替换子进程：等原进程退出
+→ Windows 下把运行中的 exe 改名 `.old` 让位 → `.new` 转正 → 按原 `--config`
+重启。`--commit-once` 模式不检查；`target/` 下的开发构建只提示不自动换
+（页面上仍可手动"更新并重启"）。配置页的三个新字段即时生效。
+
 ## Releases
 
 Push a tag like v0.1.0 and the release workflow builds the Windows x64
-binary and attaches maa-fleet-updater-win-x64.zip to the GitHub release.
+binary and attaches maa-fleet-updater-win-x64.zip (+ .sha256) to the GitHub
+release. The build bakes the commit into `MAA_FLEET_GIT_SHA` so moved tags
+are still detected as updates.
 
 ## License
 
