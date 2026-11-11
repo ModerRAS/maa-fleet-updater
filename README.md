@@ -93,8 +93,11 @@ Debug/本地构建版本（version 读不出）会被跳过应用更新，只同
 
 ## 本程序自更新
 
-常驻进程每 `self_update_hours` 小时（默认 6，0=关）查一次 GitHub Release
-（`self_update_feed` 为空即官方源，可填自建同结构 JSON 做测试）。判定规则
+常驻进程每 `self_update_hours` 小时（默认 6，0=关）查一次版本：优先读
+Release 附件里的静态 `latest.json`（走附件 CDN，不占 GitHub API 配额），
+拿不到才回退 `api.github.com`（过渡期旧 release 没有 manifest 时靠它）。
+`self_update_feed` 为空即官方源，可填自建同结构 JSON 做测试（自建源
+只认自己，不会回退官方）。判定规则
 跟 arknights-auto-update 一致：远端语义版本更高就更；版本相同但两边提
 交号都已知且不同（tag 被移动指向）也更；从不降级；没有可对照的提交
 号时不重复下载。

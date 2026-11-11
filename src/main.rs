@@ -290,11 +290,8 @@ async fn run_self_update(state: &AppState, manual_apply: bool) {
         }
     };
     let cfg = state.inner.cfg.read().await.clone();
-    let feed = if cfg.self_update_feed.trim().is_empty() {
-        self_update::DEFAULT_FEED.to_string()
-    } else {
-        cfg.self_update_feed.trim().to_string()
-    };
+    // Empty = official flow (static manifest, API fallback); set = that feed alone.
+    let feed = cfg.self_update_feed.trim().to_string();
     let client = match self_update::build_client(cfg.proxy.trim()) {
         Ok(c) => c,
         Err(e) => {

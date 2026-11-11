@@ -15,6 +15,11 @@ use tokio::sync::broadcast;
 
 pub const DEFAULT_FEED: &str =
     "https://api.github.com/repos/ModerRAS/maa-fleet-updater/releases/latest";
+/// Static manifest: same Release JSON subset, fetched through the release-asset
+/// CDN so routine checks consume zero REST API quota. The API stays as fallback
+/// for transition releases that predate the manifest.
+pub const MANIFEST_URL: &str =
+    "https://github.com/ModerRAS/maa-fleet-updater/releases/latest/download/latest.json";
 pub const ASSET_ZIP: &str = "maa-fleet-updater-win-x64.zip";
 pub const EXE_NAME: &str = "maa-fleet-updater.exe";
 
@@ -215,7 +220,29 @@ pub fn build_client(proxy: &str) -> Result<reqwest::Client, String> {
     b.build().map_err(|e| format!("build http client: {e}"))
 }
 
-pub async fn fetch_release(
+/// Empty feed = official flow: static manifest first, REST API as fallback.
+/// A custom feed is tried alone (its owner controls the source).
+async fn fetch_best(
+    client: &reqwest::Client,
+    feed: &str,
+    current_version: Option<&str>,
+) -> Result<RemoteRelease, String> {
+    let feeds: Vec<String> = if feed.trim().is_empty() {
+        vec![MANIFEST_URL.to_string(), DEFAULT_FEED.to_string()]
+    } else {
+        vec![feed.to_string()]
+    };
+    let mut errors = Vec::new();
+    for f in &feeds {
+        match fetch_release(client, f, current_version).await {
+            Ok(r) => return Ok(r),
+            Err(e) => errors.push(format!("{f}: {e}")),
+        }
+    }
+    Err(errors.join("; ".into()))
+}
+
+async fn fetch_release(
     client: &reqwest::Client,
     feed: &str,
     current_version: Option<&str>,
@@ -266,7 +293,7 @@ pub async fn fetch_release(
 }
 
 pub async fn stage_release(request: &StageRequest<'_>) -> Result<StageOutcome, String> {
-    let remote = fetch_release(request.client, request.feed, Some(current_version())).await?;
+    let remote = fetch_best(request.client, request.feed, Some(current_version())).await?;
     match decide_update(current_version(), current_commit(), &remote)? {
         UpdateDecision::Keep { message } => Ok(StageOutcome::UpToDate { message }),
         UpdateDecision::Update(plan) => {
@@ -465,7 +492,7 @@ pub fn parse_sha256_file(text: &str) -> Result<String, String> {
 pub fn ensure_asset_url(feed: &str, asset: &str) -> Result<(), String> {
     let asset_url = reqwest::Url::parse(asset).map_err(|e| format!("更新包地址无效: {e}"))?;
     let feed_url = reqwest::Url::parse(feed).map_err(|e| format!("程序更新源无效: {e}"))?;
-    if github_repo(feed).is_some() {
+    if official_source(feed) {
         let host = asset_url.host_str().unwrap_or("");
         let allowed = asset_url.scheme() == "https"
             && (host == "github.com"
@@ -497,6 +524,21 @@ pub fn validate_feed(feed: &str) -> Result<(), String> {
     } else {
         Err("self_update_feed must be https (or http on loopback)".to_string())
     }
+}
+
+/// Official flows (REST API or static manifest) may only pull program
+/// archives from GitHub hosts; anything else falls under custom-feed rules.
+fn official_source(feed: &str) -> bool {
+    if github_repo(feed).is_some() {
+        return true;
+    }
+    if let Ok(url) = reqwest::Url::parse(feed) {
+        return url.host_str() == Some("github.com")
+            && url
+                .path()
+                .starts_with("/ModerRAS/maa-fleet-updater/releases/");
+    }
+    false
 }
 
 fn github_repo(feed: &str) -> Option<(String, String)> {
@@ -983,6 +1025,20 @@ mod tests {
         let text = "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3da2b0d0f7a7c2  maa-fleet-updater-win-x64.zip\n";
         assert_eq!(parse_sha256_file(text).unwrap().len(), 64);
         assert!(parse_sha256_file("no hash here").is_err());
+    }
+
+    #[test]
+    fn official_manifest_allows_github_hosts() {
+        assert!(official_source(DEFAULT_FEED));
+        assert!(official_source(MANIFEST_URL));
+        assert!(!official_source("http://127.0.0.1:8080/x"));
+        // CDN redirect target for release assets.
+        assert!(ensure_asset_url(
+            MANIFEST_URL,
+            "https://objects.githubusercontent.com/abc/maa-fleet-updater-win-x64.zip"
+        )
+        .is_ok());
+        assert!(ensure_asset_url(MANIFEST_URL, "https://evil.com/x.zip").is_err());
     }
 
     #[test]
