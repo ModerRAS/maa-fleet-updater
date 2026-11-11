@@ -8,7 +8,10 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    uses: ./.github/workflows/check.yml
   build:
+    needs: [verify]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
