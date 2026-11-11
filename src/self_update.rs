@@ -215,7 +215,11 @@ pub fn build_client(proxy: &str) -> Result<reqwest::Client, String> {
     b.build().map_err(|e| format!("build http client: {e}"))
 }
 
-pub async fn fetch_release(client: &reqwest::Client, feed: &str) -> Result<RemoteRelease, String> {
+pub async fn fetch_release(
+    client: &reqwest::Client,
+    feed: &str,
+    current_version: Option<&str>,
+) -> Result<RemoteRelease, String> {
     let text = get_text(client, feed, feed, MAX_TEXT_BYTES).await?;
     let document: ReleaseDocument =
         serde_json::from_str(&text).map_err(|e| format!("发布信息无法解析: {e}"))?;
@@ -233,7 +237,12 @@ pub async fn fetch_release(client: &reqwest::Client, feed: &str) -> Result<Remot
                 .filter(|v| looks_like_commit(v))
                 .map(ToOwned::to_owned)
         });
-    if commit.is_none() {
+    // The commit only matters when versions tie (moved-tag detection);
+    // skip the extra tag-ref API call otherwise to save rate quota.
+    let need_commit = current_version
+        .map(|c| c.trim().trim_start_matches('v') == version)
+        .unwrap_or(true);
+    if commit.is_none() && need_commit {
         if let Some((owner, repo)) = github_repo(feed) {
             commit = fetch_tag_commit(client, &owner, &repo, &document.tag_name)
                 .await
@@ -257,7 +266,7 @@ pub async fn fetch_release(client: &reqwest::Client, feed: &str) -> Result<Remot
 }
 
 pub async fn stage_release(request: &StageRequest<'_>) -> Result<StageOutcome, String> {
-    let remote = fetch_release(request.client, request.feed).await?;
+    let remote = fetch_release(request.client, request.feed, Some(current_version())).await?;
     match decide_update(current_version(), current_commit(), &remote)? {
         UpdateDecision::Keep { message } => Ok(StageOutcome::UpToDate { message }),
         UpdateDecision::Update(plan) => {
@@ -693,11 +702,29 @@ async fn get_bytes(
         let final_url = resp.url().clone();
         ensure_asset_url(feed, final_url.as_str())?;
         if !resp.status().is_success() {
-            return Err(format!("更新请求返回 HTTP {}", resp.status()));
+            return Err(http_error_with_body(resp).await);
         }
         return read_capped(resp, max_bytes).await;
     }
     Err("重定向过多".into())
+}
+
+/// Non-2xx updater response: keep the status AND a body snippet (GitHub
+/// explains rate limits in the body), so the log actually says why.
+async fn http_error_with_body(resp: reqwest::Response) -> String {
+    let status = resp.status();
+    let snippet = read_capped(resp, 2048).await.unwrap_or_default();
+    let mut msg = format!("更新请求返回 HTTP {status}");
+    let text = String::from_utf8_lossy(&snippet);
+    let short: String = text.trim().chars().take(300).collect();
+    if !short.is_empty() {
+        msg.push_str(&format!(": {short}"));
+    }
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+    {
+        msg.push_str("（可能是 GitHub API 限流，稍后再试；或配置代理）");
+    }
+    msg
 }
 
 async fn read_capped(resp: reqwest::Response, max_bytes: u64) -> Result<Vec<u8>, String> {
@@ -756,7 +783,7 @@ async fn download_file(
         let final_url = resp.url().clone();
         ensure_asset_url(feed, final_url.as_str())?;
         if !resp.status().is_success() {
-            return Err(format!("下载返回 HTTP {}", resp.status()));
+            return Err(http_error_with_body(resp).await);
         }
         if let Some(len) = resp.content_length() {
             if len > max_bytes {

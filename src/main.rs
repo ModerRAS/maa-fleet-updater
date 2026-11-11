@@ -77,7 +77,11 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
         tokio::task::spawn_blocking(move || (discover::scan(&c2), autostart::status()))
             .await
             .unwrap_or_default();
-    let plan = load_plan(&cfg);
+    let mut plan = load_plan(&cfg);
+    // Drop entries left by older scans (removed instances, newly excluded
+    // backup dirs): commit matches by dir anyway, this is display hygiene.
+    plan.items
+        .retain(|it| instances.iter().any(|i| i.dir == it.dir));
     Json(serde_json::json!({
         "instances": instances,
         "plan": plan,
