@@ -64,7 +64,7 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <button onclick="doPost(this,&quot;/api/launch&quot;)">仅拉起（无更新时也照常用它开机）</button></div>
 <div id="preview" class="mono note"></div></div>
 <h2>实例</h2>
-<table><thead><tr><th>目录</th><th>版本</th><th>通道</th><th>资源时间</th><th>运行</th><th>待装包</th></tr></thead>
+<table><thead><tr><th>目录</th><th>版本</th><th>通道</th><th>资源时间</th><th>运行</th><th>待装包/诊断</th></tr></thead>
 <tbody id="instances"><tr><td colspan="6" class="note">未加载</td></tr></tbody></table>
 <h2>配置（保存即生效，换监听地址需重启） <span id="dirtytag" class="pill bad">有未保存修改</span></h2>
 <div class="card">
@@ -185,8 +185,16 @@ function renderDash(){
 function renderInstances(){
   var list = STATUS.instances || [];
   document.getElementById("instances").innerHTML = list.map(function(i){
-    return "<tr title=\""+esc(i.dir)+"\"><td class=\"mono\">"+esc(shortDir(i.dir))+"</td><td class=\"mono\">"+esc(i.exe_version_raw)+"</td><td>"+esc(i.channel)+"</td><td class=\"mono\">"+esc(i.resource_time||"-")+"</td><td>"+(i.running?pill(true,"运行中"):pill(false,"stopped"))+"</td><td class=\"mono\">"+esc(i.pending_package||"-")+"</td></tr>";
+    return "<tr title=\""+esc(i.dir)+"\"><td class=\"mono\">"+esc(shortDir(i.dir))+"</td><td class=\"mono\">"+esc(i.exe_version_raw)+"</td><td>"+esc(i.channel)+"</td><td class=\"mono\">"+esc(i.resource_time||"-")+"</td><td>"+(i.running?pill(true,"运行中"):pill(false,"stopped"))+"</td><td class=\"mono\">"+esc(i.pending_package||"-")+diag(i)+"</td></tr>";
   }).join("") || "<tr><td colspan=\"6\" class=\"note\">未发现实例：检查搜索根目录</td></tr>";
+}
+function diag(i){
+  var s = "";
+  if(i.updater_present === false){ s += " 缺Updater"; }
+  if(i.update_failure){ s += " 上次失败:" + String(i.update_failure).slice(0, 80); }
+  if(i.extract_leftover){ s += " 有残留解包目录"; }
+  if(i.update_success){ s += " 上次委托成功未重启?"; }
+  return s ? "<br/><span class=\"note\">" + esc(s) + "</span>" : "";
 }
 function renderPlan(){
   var items = (STATUS.plan && STATUS.plan.items) || [];

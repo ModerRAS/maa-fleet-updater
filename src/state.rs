@@ -14,6 +14,17 @@ pub struct InstanceInfo {
     pub resource_time: Option<String>,
     pub running: bool,
     pub pending_package: Option<String>,
+    /// MAA.Updater.exe next to MAA.exe (delegation target for app updates).
+    #[serde(default)]
+    pub updater_present: bool,
+    /// Content (trimmed) of pending-update-failure.txt written by the updater.
+    #[serde(default)]
+    pub update_failure: Option<String>,
+    /// Leftover NewVersionExtract dir = delegation started but never cleaned.
+    #[serde(default)]
+    pub extract_leftover: bool,
+    #[serde(default)]
+    pub update_success: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

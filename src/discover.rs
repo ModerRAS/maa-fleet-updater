@@ -94,6 +94,13 @@ fn inspect(dir: &Path, sys: &System) -> InstanceInfo {
         resource_time: read_resource_time(dir),
         running: is_running(sys, dir),
         pending_package: pending_of(dir, &cfg_json),
+        updater_present: dir.join("MAA.Updater.exe").is_file(),
+        update_failure: std::fs::read_to_string(dir.join("pending-update-failure.txt"))
+            .ok()
+            .map(|t| t.chars().take(300).collect::<String>().trim().to_string())
+            .filter(|t| !t.is_empty()),
+        extract_leftover: dir.join("NewVersionExtract").is_dir(),
+        update_success: dir.join("pending-update-success.txt").is_file(),
     }
 }
 
