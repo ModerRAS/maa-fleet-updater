@@ -301,6 +301,20 @@ async fn fetch_release(
 
 pub async fn stage_release(request: &StageRequest<'_>) -> Result<StageOutcome, String> {
     let remote = fetch_best(request.client, request.feed, Some(current_version())).await?;
+    emit(
+        &request.events,
+        "info",
+        format!(
+            "自更新源: {} 远端 v{}{}",
+            remote.source,
+            remote.version,
+            remote
+                .commit
+                .as_deref()
+                .map(|c| format!(" ({c})"))
+                .unwrap_or_default()
+        ),
+    );
     match decide_update(current_version(), current_commit(), &remote)? {
         UpdateDecision::Keep { message } => Ok(StageOutcome::UpToDate { message }),
         UpdateDecision::Update(plan) => {

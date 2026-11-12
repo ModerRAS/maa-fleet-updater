@@ -1,6 +1,6 @@
 [package]
 name = "maa-fleet-updater"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 description = "Fleet updater/launcher for multi-instance MaaAssistantArknights: GitHub-first, OTA by default, boot-window commit"
 license = "GPL-3.0-only"

@@ -36,6 +36,16 @@ pub fn commit_all(cfg: &Config, plan: &Plan, tx: &broadcast::Sender<String>) -> 
     );
     let central_res = crate::resource::central_resource_dir(&cfg.staging_dir.join("MaaResource"));
     let central_time = crate::resource::read_last_updated(&central_res);
+    emit(
+        tx,
+        "info",
+        format!(
+            "commit mode={} central={} central_time={:?}",
+            cfg.resource_mode,
+            central_res.display(),
+            central_time,
+        ),
+    );
     let mut reports = Vec::new();
     for inst in &instances {
         reports.push(commit_one(

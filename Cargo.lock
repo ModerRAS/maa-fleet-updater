@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "maa-fleet-updater"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "axum",
  "futures-util",
