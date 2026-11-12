@@ -565,6 +565,12 @@ async fn run_prepare(state: &AppState, force_full: bool) {
                             ),
                         );
                         let dest = cfg.staging_dir.join("downloads").join(&a.file_name);
+                        if force_full && dest.is_file() {
+                            // Recovery path for a poisoned staging file: refetch
+                            // from the network instead of trusting the old bytes.
+                            let _ = std::fs::remove_file(&dest);
+                            emit(&tx, "info", format!("{}: 强制重新下载", a.file_name));
+                        }
                         let mut downloaded = dest.is_file();
                         if !downloaded {
                             let total_n = a.urls.len();

@@ -52,7 +52,7 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <div class="card"><div class="row"><button onclick="preflight(this)">检查环境</button></div><div id="envout" class="mono note">未检查</div></div>
 <div class="step" id="step1"><h2>步骤 1：准备（可联网，任何时候都能做）</h2>
 <div class="note">查版本 → 下 OTA/完整包（GitHub 直链走代理）→ 中央资源库 git pull。全部落盘到中转目录，不碰任何实例。</div>
-<div class="row"><label><input id="forcefull" type="checkbox" /> 强制完整包（默认 OTA，有人掉版本时才勾）</label></div>
+<div class="row"><label><input id="forcefull" type="checkbox" /> 强制完整包并重新下载（默认 OTA；包疑似损坏时勾这个重下）</label></div>
 <div class="row"><button class="big" onclick="runPrepare(this)">开始准备</button><span id="prepstat" class="note"></span></div></div>
 <div class="step" id="step2"><h2>步骤 2：确认计划</h2>
 <div class="note">下面是上次准备的结果：谁要更新、用什么包、包下好没。没跑过准备就是空的。</div>

@@ -74,6 +74,15 @@ async fn try_one(
     }
     f.flush().await.map_err(|e| format!("flush: {e}"))?;
     drop(f);
+    // A half-dead connection can end the stream early without an error
+    // chunk; without this check the truncated file would be renamed into
+    // place and poison staging forever ("already staged" but unusable).
+    if let Some(t) = total {
+        if done != t {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(format!("short download: got {done} of {t} bytes"));
+        }
+    }
     tokio::fs::rename(&tmp, dest)
         .await
         .map_err(|e| format!("rename: {e}"))?;

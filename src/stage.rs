@@ -193,6 +193,17 @@ fn stage_app(
     if !src.is_file() {
         return Err(format!("staged file missing: {}", item.file_name));
     }
+    // MAA drops a bad package silently (clears UpdatePackage, no flag),
+    // and prepare would keep trusting it ("already staged"). Fail loudly
+    // here and drop the poisoned staging copy so the next prepare
+    // re-downloads instead of re-staging garbage.
+    if let Err(e) = check_zip(&src) {
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(inst.dir.join(&item.file_name));
+        return Err(format!(
+            "package corrupt, staging copy removed, rerun prepare: {e}"
+        ));
+    }
     let dst = inst.dir.join(&item.file_name);
     let need_copy = match (std::fs::metadata(&src), std::fs::metadata(&dst)) {
         (Ok(a), Ok(b)) => a.len() != b.len(),
@@ -248,6 +259,19 @@ fn patch_gui(dir: &Path, version: &str, package: &str) -> Result<(), String> {
     let tmp = dir.join("config").join("gui.new.json.fleetnew");
     std::fs::write(&tmp, out.as_bytes()).map_err(|e| format!("write tmp: {e}"))?;
     std::fs::rename(&tmp, &p).map_err(|e| format!("replace config: {e}"))?;
+    Ok(())
+}
+
+/// Structural check only: parses the zip central directory, which catches
+/// truncation that still snuck past the download length check (e.g. the
+/// server never sent a Content-Length). CRC-checking 300MB on every boot
+/// would stall launches; MAA itself re-validates on extract.
+fn check_zip(path: &Path) -> Result<(), String> {
+    let f = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let z = zip::ZipArchive::new(f).map_err(|e| format!("not a valid zip: {e}"))?;
+    if z.is_empty() {
+        return Err("zip has no entries".to_string());
+    }
     Ok(())
 }
 
@@ -366,4 +390,55 @@ fn launch_one(dir: &Path, tx: &broadcast::Sender<String>) -> LaunchReport {
         }
     }
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_zip(name: &str, bytes: &[u8]) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "maa-fleet-ut-zip-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    fn make_valid_zip() -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            w.start_file("a.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            use std::io::Write;
+            w.write_all(b"hello").unwrap();
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn rejects_truncated_and_garbage_zips() {
+        let good = make_valid_zip();
+        let p1 = tmp_zip("good.zip", &good);
+        assert!(check_zip(&p1).is_ok(), "valid zip rejected");
+        // Truncated: central directory gone.
+        let p2 = tmp_zip("cut.zip", &good[..good.len() / 2]);
+        assert!(check_zip(&p2).is_err(), "truncated zip accepted");
+        // Garbage bytes.
+        let p3 = tmp_zip("junk.zip", b"definitely not a zip file at all");
+        assert!(check_zip(&p3).is_err(), "garbage accepted");
+        // Empty file.
+        let p4 = tmp_zip("empty.zip", b"");
+        assert!(check_zip(&p4).is_err(), "empty file accepted");
+        for p in [&p1, &p2, &p3, &p4] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
