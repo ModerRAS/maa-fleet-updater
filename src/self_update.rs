@@ -71,6 +71,10 @@ pub struct RemoteRelease {
     pub version: String,
     pub commit: Option<String>,
     pub assets: Vec<RemoteAsset>,
+    /// The feed URL that actually produced this release (manifest or API).
+    /// Empty config feed means "official flow"; the allowlist must see
+    /// this effective source, never the empty config string.
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +83,7 @@ pub struct PlannedDownload {
     pub commit: Option<String>,
     pub archive: RemoteAsset,
     pub checksum: RemoteAsset,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +209,7 @@ fn select_download(remote: &RemoteRelease) -> Result<PlannedDownload, String> {
         commit: remote.commit.clone(),
         archive,
         checksum,
+        source: remote.source.clone(),
     })
 }
 
@@ -280,6 +286,7 @@ async fn fetch_release(
         tag: document.tag_name,
         version,
         commit,
+        source: feed.to_string(),
         assets: document
             .assets
             .into_iter()
@@ -310,8 +317,8 @@ async fn download_and_stage(
     request: &StageRequest<'_>,
     plan: &PlannedDownload,
 ) -> Result<PathBuf, String> {
-    ensure_asset_url(request.feed, &plan.archive.url)?;
-    ensure_asset_url(request.feed, &plan.checksum.url)?;
+    ensure_asset_url(&plan.source, &plan.archive.url)?;
+    ensure_asset_url(&plan.source, &plan.checksum.url)?;
     std::fs::create_dir_all(request.work_dir).map_err(|e| format!("创建自更新目录失败: {e}"))?;
     let staged = staged_path(request.install_exe);
     let staged_cleanup = staged.clone();
@@ -324,7 +331,7 @@ async fn download_and_stage(
     let checksum_text = get_text(
         request.client,
         &plan.checksum.url,
-        request.feed,
+        &plan.source,
         MAX_TEXT_BYTES,
     )
     .await?;
@@ -335,7 +342,7 @@ async fn download_and_stage(
         download_file(
             request.client,
             &plan.archive.url,
-            request.feed,
+            &plan.source,
             &part_path,
             MAX_ARCHIVE_BYTES,
         )
@@ -961,6 +968,7 @@ mod tests {
                     size: None,
                 },
             ],
+            source: MANIFEST_URL.to_string(),
         }
     }
 
@@ -1016,8 +1024,28 @@ mod tests {
             version: "0.2.0".to_string(),
             commit: None,
             assets: vec![],
+            source: MANIFEST_URL.to_string(),
         };
         assert!(decide_update("0.1.0", None, &r).is_err());
+    }
+
+    #[test]
+    fn empty_config_feed_still_allows_official_assets() {
+        // Regression: in the official flow the configured feed is "";
+        // the allowlist must judge assets against the effective source
+        // (manifest URL), not the empty config string that used to fail
+        // with "relative URL without a base".
+        let mut r = release_with("v0.2.6", None);
+        r.source = MANIFEST_URL.to_string();
+        let plan = match decide_update("0.1.0", Some("abcdef1"), &r).unwrap() {
+            UpdateDecision::Update(p) => p,
+            UpdateDecision::Keep { message } => panic!("should update: {message}"),
+        };
+        assert_eq!(plan.source, MANIFEST_URL);
+        for a in [&plan.archive.url, &plan.checksum.url] {
+            assert!(ensure_asset_url(&plan.source, a).is_ok(), "blocked: {a}");
+        }
+        assert!(ensure_asset_url("", &plan.archive.url).is_err());
     }
 
     #[test]
