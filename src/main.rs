@@ -634,6 +634,7 @@ async fn run_prepare(state: &AppState, force_full: bool) {
     }
     // resource: central git clone update (network phase)
     let repo_dir = cfg.staging_dir.join("MaaResource");
+    let mut resource_error: Option<String> = None;
     match resource::ensure_repo(
         &repo_dir,
         &cfg.resource_repo,
@@ -642,9 +643,17 @@ async fn run_prepare(state: &AppState, force_full: bool) {
     )
     .await
     {
-        Err(e) => emit(&tx, "error", format!("resource clone: {e}")),
+        Err(e) => {
+            let m = format!("resource clone: {e}");
+            emit(&tx, "error", m.clone());
+            resource_error = Some(m);
+        }
         Ok(()) => match resource::update_repo(&repo_dir, &cfg.resource_branch, &cfg.proxy).await {
-            Err(e) => emit(&tx, "error", format!("resource pull: {e}")),
+            Err(e) => {
+                let m = format!("resource pull: {e}");
+                emit(&tx, "error", m.clone());
+                resource_error = Some(m);
+            }
             Ok(rev) => {
                 let t = resource::read_last_updated(&resource::central_resource_dir(&repo_dir));
                 plan.resource_time = t.clone();
@@ -663,6 +672,7 @@ async fn run_prepare(state: &AppState, force_full: bool) {
             "kind": i.kind, "file": i.file_name, "downloaded": i.downloaded,
         })).collect::<Vec<_>>(),
         "resource_time": plan.resource_time,
+        "resource_error": resource_error,
     });
     write_json(&cfg.staging_dir.join("last_prepare.json"), &summary);
 }
@@ -982,7 +992,9 @@ async fn main() {
         std::process::exit(dump_logs(&args.cfg, spec));
     }
     let (cfg_path, commit_once, from_self_update) = (args.cfg, args.once, args.from_self_update);
-    let cfg_path = std::fs::canonicalize(&cfg_path).unwrap_or(cfg_path);
+    let cfg_path = std::fs::canonicalize(&cfg_path)
+        .map(|p| crate::fsutil::from_verbatim(&p))
+        .unwrap_or(cfg_path);
     let (cfg, cfg_note) = config::Config::load_or_create(&cfg_path);
     state::init_log_store(cfg.staging_dir.clone());
     let (tx, _rx) = state::event_bus();
@@ -1021,6 +1033,21 @@ async fn main() {
             tx,
         }),
     };
+    {
+        let c = state.inner.cfg.read().await.clone();
+        state::emit(
+            &state.inner.tx,
+            "info",
+            format!(
+                "startup v{} ({}) config={} staging={} mode={}",
+                self_update::current_version(),
+                self_update::current_commit().unwrap_or("nocommit"),
+                state.inner.cfg_path.display(),
+                c.staging_dir.display(),
+                c.resource_mode,
+            ),
+        );
+    }
     if state.inner.cfg.read().await.commit_on_startup || commit_once {
         run_commit_launch(&state).await;
     }

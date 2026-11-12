@@ -198,6 +198,7 @@ function renderPlan(){
 function renderLast(){
   var lp = STATUS.last_prepare, lc = STATUS.last_commit, s = "";
   s += "<div>上次准备：" + (lp && lp.at ? ftime(lp.at) : "无") + "</div>";
+  if(lp && lp.resource_error){ s += "<div>资源失败：" + esc(lp.resource_error) + "</div>"; }
   s += "<div>上次提交：" + (lc && lc.at ? ftime(lc.at) : "无") + "</div>";
   if(lc && lc.committed){ var ok=0; for(var i=0;i<lc.committed.length;i++){ if(lc.committed[i].ok) ok++; } s += "<div>提交结果：" + ok + "/" + lc.committed.length + " 成功</div>"; }
   document.getElementById("lastruns").innerHTML = s;

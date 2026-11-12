@@ -27,6 +27,14 @@ fn git_args(proxy: &str) -> Vec<String> {
 }
 
 async fn git(dir: Option<&Path>, proxy: &str, args: &[&str]) -> Result<String, String> {
+    let owned;
+    let dir = match dir {
+        Some(d) => {
+            owned = crate::fsutil::from_verbatim(d);
+            Some(owned.as_path())
+        }
+        None => None,
+    };
     let mut cmd = tokio::process::Command::new("git");
     for a in git_args(proxy) {
         cmd.arg(a);
@@ -56,18 +64,13 @@ pub async fn ensure_repo(
         return Ok(());
     }
     crate::fsutil::ensure_parent(repo_dir, "resource repo")?;
+    let dest = crate::fsutil::from_verbatim(repo_dir)
+        .to_string_lossy()
+        .into_owned();
     git(
         None,
         proxy,
-        &[
-            "clone",
-            "--depth",
-            "1",
-            "-b",
-            branch,
-            url,
-            &repo_dir.to_string_lossy(),
-        ],
+        &["clone", "--depth", "1", "-b", branch, url, &dest],
     )
     .await
     .map(|_| ())
@@ -188,9 +191,11 @@ pub fn is_linked_to(central_res: &Path, instance_dir: &Path) -> bool {
 /// A pre-existing real dir is preserved as resource.fleetbak.<ms>.
 /// Returns "linked" or "already-linked" for status notes.
 pub fn link_into(central_res: &Path, instance_dir: &Path) -> Result<&'static str, String> {
-    let target = central_res
-        .canonicalize()
-        .map_err(|e| format!("central resource missing {}: {e}", central_res.display()))?;
+    let target = crate::fsutil::from_verbatim(
+        &central_res
+            .canonicalize()
+            .map_err(|e| format!("central resource missing {}: {e}", central_res.display()))?,
+    );
     if !target.join("version.json").is_file() {
         return Err(format!(
             "central resource has no version.json: {}",

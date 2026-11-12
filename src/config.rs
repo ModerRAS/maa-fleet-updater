@@ -193,6 +193,7 @@ impl Config {
                 }
             }
         }
+        self.staging_dir = crate::fsutil::from_verbatim(&self.staging_dir);
     }
 
     pub fn save_to(&mut self, path: &Path) -> Result<(), String> {
