@@ -24,7 +24,11 @@ use axum::{
 };
 use futures_util::StreamExt;
 use state::{emit, InstanceInfo, Plan, PlanItem};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -91,6 +95,8 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
         "autostart_detail": auto.1,
         "config_path": cfg_path.to_string_lossy(),
         "self_update": state.inner.su.read().await.clone(),
+        "bind_note": bind_note(&cfg),
+        "log_file": crate::state::log_file_path(),
     }))
 }
 
@@ -110,8 +116,13 @@ async fn save_config(
     if let Err(e) = new_cfg.save_to(&path) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
-    let restart = state.inner.cfg.read().await.web_bind != new_cfg.web_bind;
-    *state.inner.cfg.write().await = new_cfg;
+    let old = state.inner.cfg.read().await.clone();
+    let restart = old.web_bind != new_cfg.web_bind;
+    let staging_changed = old.staging_dir != new_cfg.staging_dir;
+    *state.inner.cfg.write().await = new_cfg.clone();
+    if staging_changed {
+        state::init_log_store(new_cfg.staging_dir.clone());
+    }
     Json(serde_json::json!({"saved": true, "restart_needed": restart})).into_response()
 }
 
@@ -356,6 +367,38 @@ async fn run_self_update(state: &AppState, manual_apply: bool) {
             }
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+struct LogsQuery {
+    #[serde(default)]
+    tail: Option<usize>,
+    #[serde(default)]
+    level: Option<String>,
+}
+
+/// Pulled history for the WebUI (the SSE stream is live-only).
+/// GET /api/logs?tail=500&level=error -> {lines:[...], count}
+async fn logs(Query(q): Query<LogsQuery>) -> impl IntoResponse {
+    let tail = q.tail.unwrap_or(500).clamp(1, 3000);
+    let level = q.level.clone();
+    let lines =
+        tokio::task::spawn_blocking(move || crate::state::read_logs(tail, level.as_deref()))
+            .await
+            .unwrap_or_default();
+    Json(serde_json::json!({ "lines": lines, "count": lines.len() })).into_response()
+}
+
+/// Whole on-disk log as plain text (survives daemon restarts).
+async fn logs_download() -> impl IntoResponse {
+    let body = tokio::task::spawn_blocking(|| {
+        crate::state::log_file_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    ([("content-type", "text/plain; charset=utf-8")], body).into_response()
 }
 
 async fn events(
@@ -668,6 +711,61 @@ async fn run_commit_launch(state: &AppState) {
     write_json(&staging.join("last_commit.json"), &summary);
 }
 
+/// --logs: print recent on-disk log lines and exit (for shells and
+/// agents, no WebUI needed). Reads fleet.log + fleet.old.log under
+/// staging/logs. Exit 0 ok, 1 no logs yet, 2 bad config.
+fn dump_logs(cfg_path: &Path, spec: &LogsSpec) -> i32 {
+    let mut cfg = match config::Config::load(cfg_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("load config {}: {e}", cfg_path.display());
+            return 2;
+        }
+    };
+    cfg.resolve_staging(cfg_path);
+    let dir = cfg.staging_dir.join("logs");
+    let mut all: Vec<String> = Vec::new();
+    for name in ["fleet.old.log", "fleet.log"] {
+        if let Ok(t) = std::fs::read_to_string(dir.join(name)) {
+            all.extend(t.lines().map(|s| s.to_string()));
+        }
+    }
+    if all.is_empty() {
+        eprintln!("no logs yet in {}", dir.display());
+        return 1;
+    }
+    for line in select_logs(all, spec.tail, spec.level.as_deref()) {
+        println!("{}", pretty_log(&line));
+    }
+    0
+}
+
+/// Shared tail+level selection (mirrors state::read_logs over the ring).
+fn select_logs(all: Vec<String>, tail: usize, level: Option<&str>) -> Vec<String> {
+    let v: Vec<String> = match level.filter(|s| !s.is_empty()) {
+        Some(lv) => {
+            let pat = format!("\"level\":\"{lv}\"");
+            all.into_iter().filter(|s| s.contains(&pat)).collect()
+        }
+        None => all,
+    };
+    if tail > 0 && v.len() > tail {
+        v[v.len() - tail..].to_vec()
+    } else {
+        v
+    }
+}
+
+fn pretty_log(line: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+        let ts = v["ts"].as_u64().map(|t| t.to_string()).unwrap_or_default();
+        let lv = v["level"].as_str().unwrap_or("?");
+        let msg = v["msg"].as_str().unwrap_or(line);
+        return format!("[{ts}][{lv}] {msg}");
+    }
+    line.to_string()
+}
+
 fn now_ts() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -704,13 +802,28 @@ fn default_config_path() -> PathBuf {
     PathBuf::from("config.json")
 }
 
-fn parse_args() -> (PathBuf, bool, bool) {
+struct Args {
+    cfg: PathBuf,
+    once: bool,
+    from_self_update: bool,
+    logs: Option<LogsSpec>,
+}
+
+struct LogsSpec {
+    tail: usize,
+    level: Option<String>,
+}
+
+fn parse_args() -> Args {
     // No --config: primary double-click use, anchor next to the exe.
     // Explicit relative --config: classic CLI semantics, resolve against CWD.
     let mut cfg: Option<PathBuf> = None;
     let mut once = false;
     let mut from_self_update = false;
     let mut explicit = false;
+    let mut want_logs = false;
+    let mut logs_tail: usize = 200;
+    let mut logs_level: Option<String> = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         if a == "--config" {
@@ -722,6 +835,16 @@ fn parse_args() -> (PathBuf, bool, bool) {
             once = true;
         } else if a == "--from-self-update" {
             from_self_update = true;
+        } else if a == "--logs" {
+            want_logs = true;
+        } else if a == "--logs-tail" {
+            if let Some(v) = it.next() {
+                logs_tail = v.parse().unwrap_or(200).clamp(1, 3000);
+            }
+        } else if a == "--logs-level" {
+            if let Some(v) = it.next() {
+                logs_level = Some(v);
+            }
         }
     }
     let mut cfg = cfg.unwrap_or_else(default_config_path);
@@ -731,7 +854,15 @@ fn parse_args() -> (PathBuf, bool, bool) {
     if anchor {
         anchor_to_exe_dir(&mut cfg);
     }
-    (cfg, once, from_self_update)
+    Args {
+        cfg,
+        once,
+        from_self_update,
+        logs: want_logs.then_some(LogsSpec {
+            tail: logs_tail,
+            level: logs_level,
+        }),
+    }
 }
 
 struct Replacer {
@@ -789,8 +920,35 @@ fn anchor_to_exe_dir(cfg: &mut PathBuf) {
 
 /// First double-click experience: no config existed, so show the user where
 /// to continue (WebUI in the default browser). Best effort only.
+/// 0.0.0.0 / :: mean "LAN-visible" to the listener but are not openable
+/// in a browser; hop through loopback for the first-run popup.
+fn browser_url(bind: &str) -> String {
+    match bind.parse::<std::net::SocketAddr>() {
+        Ok(a) if a.ip().is_unspecified() => format!("http://127.0.0.1:{}", a.port()),
+        _ => format!("http://{bind}"),
+    }
+}
+
+/// WebUI-facing note: binding 0.0.0.0 without a token lets anyone on the
+/// LAN operate the fleet (prepare/commit/launch). Empty = loopback, fine.
+fn bind_note(cfg: &config::Config) -> String {
+    let unspecified = cfg
+        .web_bind
+        .parse::<std::net::SocketAddr>()
+        .map(|a| a.ip().is_unspecified())
+        .unwrap_or(false);
+    if !unspecified {
+        return String::new();
+    }
+    if cfg.auth_token.trim().is_empty() {
+        "警告：监听在 0.0.0.0 且未设 Token，局域网任何人可操作，建议设置 Token".to_string()
+    } else {
+        "监听在 0.0.0.0，局域网可访问（已设 Token）".to_string()
+    }
+}
+
 fn open_browser_once(bind: &str) {
-    let url = format!("http://{bind}");
+    let url = browser_url(bind);
     let _ = std::process::Command::new("cmd")
         .args(["/C", "start", "", &url])
         .stdin(std::process::Stdio::null())
@@ -818,9 +976,15 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let (cfg_path, commit_once, from_self_update) = parse_args();
+    let args = parse_args();
+    // Log dump for shells/agents: no daemon, no WebUI, stdout only.
+    if let Some(spec) = &args.logs {
+        std::process::exit(dump_logs(&args.cfg, spec));
+    }
+    let (cfg_path, commit_once, from_self_update) = (args.cfg, args.once, args.from_self_update);
     let cfg_path = std::fs::canonicalize(&cfg_path).unwrap_or(cfg_path);
     let (cfg, cfg_note) = config::Config::load_or_create(&cfg_path);
+    state::init_log_store(cfg.staging_dir.clone());
     let (tx, _rx) = state::event_bus();
     // Fresh defaults were just written (missing or corrupt config):
     // this is effectively a first run, open the WebUI for the user.
@@ -913,6 +1077,8 @@ async fn main() {
         )
         .route("/api/self-update/check", post(self_update_check))
         .route("/api/self-update/apply", post(self_update_apply))
+        .route("/api/logs", get(logs))
+        .route("/api/logs/download", get(logs_download))
         .route("/events", get(events))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state);
@@ -927,4 +1093,25 @@ async fn main() {
         open_browser_once(&bind);
     }
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn logs_tail_and_level_filter() {
+        let all = vec![
+            r#"{"ts":1,"level":"info","msg":"a"}"#.to_string(),
+            r#"{"ts":2,"level":"error","msg":"b"}"#.to_string(),
+            r#"{"ts":3,"level":"info","msg":"c"}"#.to_string(),
+        ];
+        assert_eq!(select_logs(all.clone(), 0, None).len(), 3);
+        assert_eq!(select_logs(all.clone(), 2, None).len(), 2);
+        let e = select_logs(all.clone(), 0, Some("error"));
+        assert_eq!(e.len(), 1);
+        assert!(e[0].contains('b'));
+        assert_eq!(pretty_log(&all[1]), "[2][error] b");
+        assert_eq!(pretty_log("raw"), "raw");
+    }
 }

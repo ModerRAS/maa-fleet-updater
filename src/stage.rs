@@ -91,14 +91,54 @@ fn commit_one(
         return rep;
     }
     if let Some(ct) = central_time {
-        if older(inst.resource_time.as_deref(), ct) {
-            match crate::resource::merge_into(central_res, &inst.dir, tx) {
-                Ok(n) => {
-                    rep.resource_files = n;
+        let stale_link =
+            cfg.resource_mode == "link" && !crate::resource::is_linked_to(central_res, &inst.dir);
+        if older(inst.resource_time.as_deref(), ct) || stale_link {
+            if cfg.resource_mode == "link" {
+                match crate::resource::link_into(central_res, &inst.dir) {
+                    Ok(how) => {
+                        rep.note.push_str(&format!("resource {how}; "));
+                    }
+                    Err(e) => {
+                        // Link creation failed (privilege/FS): fall back to a
+                        // copy so the instance still advances; kept visible.
+                        match crate::resource::merge_into(central_res, &inst.dir, tx) {
+                            Ok(n) => {
+                                rep.resource_files = n;
+                                rep.note
+                                    .push_str(&format!("link failed, copied instead: {e}; "));
+                            }
+                            Err(e2) => {
+                                rep.ok = false;
+                                rep.note.push_str(&format!(
+                                    "resource link failed: {e}; copy failed: {e2}; "
+                                ));
+                            }
+                        }
+                    }
                 }
-                Err(e) => {
-                    rep.ok = false;
-                    rep.note.push_str(&format!("resource merge failed: {e}; "));
+            } else {
+                // Leaving link mode: a link must never be merged through
+                // (the writes would land in the central repo). Restore first.
+                if crate::resource::is_link(&inst.dir.join("resource")) {
+                    match crate::resource::unlink_restore(&inst.dir) {
+                        Ok(how) => rep.note.push_str(&format!("resource {how}; ")),
+                        Err(e) => {
+                            rep.ok = false;
+                            rep.note.push_str(&format!("resource unlink failed: {e}; "));
+                        }
+                    }
+                }
+                if rep.ok {
+                    match crate::resource::merge_into(central_res, &inst.dir, tx) {
+                        Ok(n) => {
+                            rep.resource_files = n;
+                        }
+                        Err(e) => {
+                            rep.ok = false;
+                            rep.note.push_str(&format!("resource merge failed: {e}; "));
+                        }
+                    }
                 }
             }
         }

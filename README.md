@@ -60,6 +60,7 @@ MAA.Updater.exe 完成安装，和手动点更新是同一条代码路径。
     常驻模式：  schtasks /create /tn MAA-Fleet /sc onlogon /delay 0000:10
                 /tr "maa-fleet-updater.exe --config config.json 路径"
     纯 stager： 同上，命令末尾再加 --commit-once（提交+拉起后退出，不开 WebUI）
+    查日志（免开 WebUI）： maa-fleet-updater.exe --config config.json 路径 --logs [--logs-tail 200] [--logs-level error]
 
 3. 首次运行建议先在 WebUI 点一次准备，确认计划无误；之后每天的自动准备
    由 auto_prepare_hours（默认 6 小时）完成，重启即自动提交+拉起。

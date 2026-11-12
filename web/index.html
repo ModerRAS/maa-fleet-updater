@@ -40,6 +40,7 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <span id="health" class="pill idle">?</span>
 <span id="busy" class="pill idle">空闲</span>
 <span id="cfgwarn" class="note"></span>
+<span id="bindwarn" class="note"></span>
 </div>
 <div id="firstrun"><b>首次使用？</b><span> 先到下面「配置」里把 MAA 所在的目录加进搜索根目录，保存后再点刷新状态。</span></div>
 <h2>状态总览</h2>
@@ -76,6 +77,8 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" oninput="dirty()" /></label></div>
 <div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" oninput="dirty()" /></label>
 <label>分支 <input id="f_branch" type="text" size="10" oninput="dirty()" /></label></div>
+<div class="row"><label>资源同步方式 <select id="f_mode" onchange="dirty()"><option value="link">link（符号链接，零拷贝）</option><option value="copy">copy（逐实例复制）</option></select></label>
+<span class="note">link 把各实例 resource/ 指向中央仓库，git pull 一次全场生效；切回 copy 会自动恢复备份</span></div>
 <div class="row"><label>代理（空=直连，GitHub 与 git 共用） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" oninput="dirty()" /></label></div>
 <div class="row"><label>API 基地址列表</label></div>
 <div id="apis"></div>
@@ -93,7 +96,7 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <label><input id="f_takeover" type="checkbox" onchange="dirty()" /> 接管实例开机自启（删 MAA 自带计划任务项）</label>
 </div>
 <h3>网页服务</h3>
-<div class="row"><label>监听地址（改了需重启本程序） <input id="f_bind" type="text" oninput="dirty()" /></label>
+<div class="row"><label>监听地址（改了需重启；填 0.0.0.0:38080 对局域网开放，记得设 Token） <input id="f_bind" type="text" oninput="dirty()" /></label>
 <label>Token（空=不鉴权） <input id="f_token" type="text" oninput="dirty()" /></label></div>
 <div class="row"><button onclick="saveConfig(this)">保存配置</button><span id="savemsg" class="note"></span></div>
 </div>
@@ -112,6 +115,7 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <div id="suver" class="mono note">未加载</div>
 <div class="note">默认每 6 小时查一次 GitHub Release；有新构建且自动应用开着就自己下载、重启。开发目录（target/）下只提示不自动换。换监听地址后重启才生效那类配置不受影响。</div></div>
 <h2>日志</h2>
+<div class="row"><label>最近 <input id="logtail" class="num" type="number" value="300" min="50" max="3000" /></label><label>级别 <select id="loglevel"><option value="">全部</option><option value="info">info</option><option value="warn">warn</option><option value="error">error</option></select></label><button onclick="pullLogs(this)">拉取历史</button><button onclick="downloadLogs(this)">下载日志文件</button><span class="note">历史落盘在中转目录 logs/，重启不丢；下面是实时流</span></div>
 <div class="row"><button onclick="clearLog(this)">清空</button><label><input id="pause" type="checkbox" /> 暂停滚动</label></div>
 <div id="log"></div>
 <script>
@@ -159,7 +163,9 @@ function refreshAll(btn){ withBtn(btn, async function(){
   var r = await api("/api/status", "GET");
   if(!r.ok){ toast("刷新状态失败（HTTP "+r.status+"）："+r.text, false); return; }
   STATUS = r.json;
+  document.getElementById("bindwarn").textContent = (STATUS.bind_note || "");
   renderDash(); renderInstances(); renderPlan(); renderLast(); renderAutostart(); renderSelfUpdate();
+  if(STATUS.log_file){ document.getElementById("logtail").title = STATUS.log_file; }
   document.getElementById("firstrun").style.display = ((STATUS.instances||[]).length===0) ? "block" : "none";
 }); }
 function kindLabel(k){ if(k==="ota") return "OTA 增量"; if(k==="full") return "完整包"; return "无"; }
@@ -253,6 +259,7 @@ function loadConfig(btn){ withBtn(btn, async function(){
   document.getElementById("f_staging").value = CFG.staging_dir;
   document.getElementById("f_repo").value = CFG.resource_repo;
   document.getElementById("f_branch").value = CFG.resource_branch;
+  document.getElementById("f_mode").value = CFG.resource_mode || "link";
   document.getElementById("f_proxy").value = CFG.proxy;
   document.getElementById("f_bind").value = CFG.web_bind;
   document.getElementById("f_token").value = CFG.auth_token;
@@ -273,6 +280,7 @@ function collectConfig(){
   CFG.staging_dir = document.getElementById("f_staging").value;
   CFG.resource_repo = document.getElementById("f_repo").value;
   CFG.resource_branch = document.getElementById("f_branch").value;
+  CFG.resource_mode = document.getElementById("f_mode").value;
   CFG.proxy = document.getElementById("f_proxy").value;
   CFG.web_bind = document.getElementById("f_bind").value;
   CFG.auth_token = document.getElementById("f_token").value;
@@ -332,6 +340,27 @@ function autostart(btn, on){ withBtn(btn, async function(){
   refreshAll();
 }); }
 function clearLog(btn){ document.getElementById("log").textContent=""; }
+function pullLogs(btn){ withBtn(btn, async function(){
+  var tail = document.getElementById("logtail").value || "300";
+  var lv = document.getElementById("loglevel").value;
+  var r = await api("/api/logs?tail=" + encodeURIComponent(tail) + (lv ? "&level=" + encodeURIComponent(lv) : ""), "GET");
+  if(!r.ok){ toast("拉取历史失败（HTTP " + r.status + "）：" + r.text, false); return; }
+  var lines = (r.json && r.json.lines) || [];
+  log("—— 历史 " + lines.length + " 条 ——");
+  lines.forEach(function(s){ try { var o = JSON.parse(s); log("[" + o.level + "] " + o.msg); } catch(_) { log(s); } });
+}); }
+function downloadLogs(btn){ withBtn(btn, async function(){
+  setBusy(true);
+  try {
+    var r = await fetch("/api/logs/download", {headers: hdr()});
+    if(!r.ok){ toast("下载失败（HTTP " + r.status + "）", false); return; }
+    var b = await r.blob(); var a = document.createElement("a");
+    a.href = URL.createObjectURL(b); a.download = "fleet.log"; a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+    toast("日志已下载", true);
+  } catch(e){ toast(String(e), false); }
+  finally { setBusy(false); }
+}); }
 var esFailNotified = false;
 function connect(){
   if(es){ try{ es.close(); }catch(e){} es = null; }

@@ -16,6 +16,9 @@ fn default_resource_repo() -> String {
 fn default_branch() -> String {
     "main".to_string()
 }
+fn default_resource_mode() -> String {
+    "link".to_string()
+}
 fn default_api_bases() -> Vec<String> {
     vec![
         "https://api.maa.plus/MaaAssistantArknights/api/".to_string(),
@@ -56,6 +59,10 @@ pub struct Config {
     pub resource_repo: String,
     #[serde(default = "default_branch")]
     pub resource_branch: String,
+    /// "link" = symlink <instance>/resource -> central resource (zero-copy,
+    /// instant fleet-wide); "copy" = classic per-instance merge.
+    #[serde(default = "default_resource_mode")]
+    pub resource_mode: String,
     #[serde(default = "default_api_bases")]
     pub maa_api_bases: Vec<String>,
     /// e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080". Empty = direct.
@@ -94,6 +101,7 @@ impl Default for Config {
             staging_dir: default_staging(),
             resource_repo: default_resource_repo(),
             resource_branch: default_branch(),
+            resource_mode: default_resource_mode(),
             maa_api_bases: default_api_bases(),
             proxy: String::new(),
             commit_on_startup: true,
@@ -225,6 +233,9 @@ impl Config {
             || self.resource_repo.starts_with("https://"))
         {
             return Err("resource_repo must be http(s)".to_string());
+        }
+        if self.resource_mode != "copy" && self.resource_mode != "link" {
+            return Err("resource_mode must be copy|link".to_string());
         }
         self.web_bind
             .parse::<std::net::SocketAddr>()
