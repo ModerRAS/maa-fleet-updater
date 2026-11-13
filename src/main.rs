@@ -370,6 +370,75 @@ async fn run_self_update(state: &AppState, manual_apply: bool) {
 }
 
 #[derive(serde::Deserialize)]
+struct InstanceLogQuery {
+    dir: String,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    tail: Option<usize>,
+}
+
+/// Diagnostic files we are willing to read inside an instance. Whitelisted
+/// by exact relative path so this endpoint can never become an arbitrary
+/// file reader, and the dir must match a discovered instance.
+const INSTANCE_LOG_FILES: [&str; 4] = [
+    "debug/pending-update-applier.log",
+    "debug/maa.log",
+    "pending-update-failure.txt",
+    "pending-update-success.txt",
+];
+
+/// GET /api/instance-logs?dir=<instance>&file=debug/pending-update-applier.log&tail=200
+/// MAA and its updater keep the only record of why an app update was
+/// dropped; without this the failure is invisible over the network.
+async fn instance_logs(
+    State(state): State<AppState>,
+    Query(q): Query<InstanceLogQuery>,
+) -> impl IntoResponse {
+    let cfg = state.inner.cfg.read().await.clone();
+    let want_file = q
+        .file
+        .clone()
+        .unwrap_or_else(|| INSTANCE_LOG_FILES[0].to_string());
+    if !INSTANCE_LOG_FILES.contains(&want_file.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("file not allowed: {want_file}"),
+        )
+            .into_response();
+    }
+    let tail = q.tail.unwrap_or(200).clamp(1, 2000);
+    let want_dir = q.dir.clone();
+    let file_for_task = want_file.clone();
+    let body = tokio::task::spawn_blocking(move || {
+        let instances = discover::scan(&cfg);
+        let target = instances.iter().find(|i| {
+            let a = std::fs::canonicalize(&i.dir).unwrap_or_else(|_| i.dir.clone());
+            let b = std::fs::canonicalize(&want_dir).unwrap_or_else(|_| PathBuf::from(&want_dir));
+            a == b
+        });
+        let inst = match target {
+            Some(i) => i,
+            None => return Err("dir is not a discovered instance".to_string()),
+        };
+        let path = inst.dir.join(&file_for_task);
+        let text = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let text = String::from_utf8_lossy(&text);
+        let mut lines: Vec<&str> = text.lines().collect();
+        if lines.len() > tail {
+            lines = lines.split_off(lines.len() - tail);
+        }
+        Ok::<String, String>(lines.join("\n"))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("task failed: {e}")));
+    match body {
+        Ok(text) => Json(serde_json::json!({"file": want_file, "text": text})).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct LogsQuery {
     #[serde(default)]
     tail: Option<usize>,
@@ -1111,6 +1180,7 @@ async fn main() {
         .route("/api/self-update/check", post(self_update_check))
         .route("/api/self-update/apply", post(self_update_apply))
         .route("/api/logs", get(logs))
+        .route("/api/instance-logs", get(instance_logs))
         .route("/api/logs/download", get(logs_download))
         .route("/events", get(events))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
