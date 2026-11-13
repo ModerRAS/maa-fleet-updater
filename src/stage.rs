@@ -145,7 +145,12 @@ fn commit_one(
     }
     if let Some(ct) = central_time {
         let stale_link = link_wanted && !crate::resource::is_linked_to(central_res, &inst.dir);
-        if older(inst.resource_time.as_deref(), ct) || stale_link {
+        // Leaving link mode must always restore a real dir, even when the
+        // timestamps already match: an up-to-date linked instance would
+        // otherwise keep its link forever and stay one app update away from
+        // the same fleet-wide wipe.
+        let needs_unlink = !link_wanted && crate::resource::is_link(&inst.dir.join("resource"));
+        if older(inst.resource_time.as_deref(), ct) || stale_link || needs_unlink {
             if link_wanted {
                 match crate::resource::link_into(central_res, &inst.dir) {
                     Ok(how) => {
@@ -585,6 +590,50 @@ mod tests {
         assert_eq!(rep.app.as_deref(), Some("pkg.zip"));
         // The shared target survived untouched.
         assert!(central.join("version.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Copy mode must reclaim an instance whose resource is still a link even
+    /// when its timestamps already match the central repo -- otherwise the
+    /// link silently survives the mode switch.
+    #[test]
+    fn copy_mode_unlinks_even_when_timestamps_match() {
+        let root = tmp_root("copyunlink");
+        let stamp = "2026-01-01 00:00:00.000";
+        let central = mk_central(&root, stamp);
+        let inst_dir = mk_instance(&root, b"exe");
+        assert_eq!(
+            crate::resource::link_into(&central, &inst_dir).unwrap(),
+            "linked"
+        );
+        assert!(crate::resource::is_link(&inst_dir.join("resource")));
+        let cfg = Config {
+            search_roots: vec![root.clone()],
+            staging_dir: root.join("staging"),
+            resource_mode: "copy".to_string(),
+            takeover_autostart: false,
+            ..Default::default()
+        };
+        let mut info = info_for(&inst_dir);
+        // Timestamps equal: the old code skipped the whole resource block.
+        info.resource_time = Some(stamp.to_string());
+        let plan = Plan::default();
+        let (tx, _rx) = broadcast::channel(64);
+        let rep = commit_one(&cfg, &plan, &info, &central, Some(stamp), &tx);
+        assert!(rep.ok, "commit failed: {}", rep.note);
+        assert!(
+            !crate::resource::is_link(&inst_dir.join("resource")),
+            "link survived copy mode: {}",
+            rep.note
+        );
+        assert!(
+            inst_dir
+                .join("resource")
+                .join("tasks")
+                .join("a.json")
+                .is_file(),
+            "merge did not run after unlink"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
