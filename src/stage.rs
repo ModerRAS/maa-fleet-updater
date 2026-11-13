@@ -111,7 +111,20 @@ fn commit_one(
         .find(|i| i.dir == inst.dir)
         .map(|i| i.kind == "ota" || i.kind == "full")
         .unwrap_or(false);
-    let link_wanted = cfg.resource_mode == "link" && !app_pending;
+    // Link mode is disabled unless explicitly opted in: MAA's own updater
+    // deletes `resource` on a full package, and a recursive delete through
+    // a junction wipes the shared target for every linked instance.
+    if cfg.resource_mode == "link" && !cfg.experimental_link_mode {
+        emit(
+            tx,
+            "warn",
+            format!(
+                "{}: resource_mode=link 但未开启 experimental_link_mode，按 copy 处理（链接模式与 MAA 更新器不兼容）",
+                inst.dir.display()
+            ),
+        );
+    }
+    let link_wanted = cfg.resource_mode == "link" && cfg.experimental_link_mode && !app_pending;
     if app_pending && crate::resource::is_link(&inst.dir.join("resource")) {
         match crate::resource::unlink_restore(&inst.dir) {
             Ok(how) => {
@@ -592,6 +605,41 @@ mod tests {
         assert_eq!(rep.app.as_deref(), Some("pkg.zip"));
         // The shared target survived untouched.
         assert!(central.join("version.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// link requested but experimental_link_mode off: behave like copy.
+    /// This is the guard that keeps a stale config from re-arming the outage.
+    #[test]
+    fn link_mode_is_dead_without_opt_in() {
+        let root = tmp_root("nolink");
+        let stamp = "2026-01-01 00:00:00.000";
+        let central = mk_central(&root, stamp);
+        let inst_dir = mk_instance(&root, b"exe");
+        let cfg = Config {
+            search_roots: vec![root.clone()],
+            staging_dir: root.join("staging"),
+            resource_mode: "link".to_string(),
+            experimental_link_mode: false,
+            takeover_autostart: false,
+            ..Default::default()
+        };
+        let plan = Plan::default();
+        let (tx, _rx) = broadcast::channel(64);
+        let rep = commit_one(
+            &cfg,
+            &plan,
+            &info_for(&inst_dir),
+            &central,
+            Some(stamp),
+            &tx,
+        );
+        assert!(rep.ok, "commit failed: {}", rep.note);
+        assert!(
+            !crate::resource::is_link(&inst_dir.join("resource")),
+            "link mode must stay dead without opt-in: {}",
+            rep.note
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

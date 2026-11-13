@@ -77,8 +77,8 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" oninput="dirty()" /></label></div>
 <div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" oninput="dirty()" /></label>
 <label>分支 <input id="f_branch" type="text" size="10" oninput="dirty()" /></label></div>
-<div class="row"><label>资源同步方式 <select id="f_mode" onchange="dirty()"><option value="copy">copy（逐实例复制，默认）</option><option value="link">link（符号链接，实验性：更新器会删 resource 目录）</option></select></label>
-<span class="note">copy 给各实例复制中央仓库（和 MAA 自己更新一致）；link 为零拷贝实验选项，切回 copy 会自动恢复备份</span></div>
+<div class="row"><label>资源同步方式 <select id="f_mode" onchange="dirty()"><option value="copy">copy（逐实例复制，唯一支持的模式）</option><option value="link">link（已禁用：MAA 更新器会删除 resource）</option></select></label>
+<span class="note">copy 给各实例复制中央仓库（与 MAA 自身更新一致）。link 已禁用：MAA 完整包更新会递归删除 resource，符号链接会把共享目录一起删掉（曾导致全队故障）</span></div>
 <div class="row"><label>代理（空=直连，GitHub 与 git 共用） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" oninput="dirty()" /></label></div>
 <div class="row"><label>API 基地址列表</label></div>
 <div id="apis"></div>

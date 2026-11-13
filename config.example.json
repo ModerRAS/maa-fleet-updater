@@ -5,6 +5,7 @@
   "resource_repo": "https://github.com/MaaAssistantArknights/MaaResource",
   "resource_branch": "main",
   "resource_mode": "copy",
+  "experimental_link_mode": false,
   "maa_api_bases": [
     "https://api.maa.plus/MaaAssistantArknights/api/",
     "https://api2.maa.plus/MaaAssistantArknights/api/"

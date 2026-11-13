@@ -64,10 +64,19 @@ pub struct Config {
     pub resource_repo: String,
     #[serde(default = "default_branch")]
     pub resource_branch: String,
-    /// "link" = symlink <instance>/resource -> central resource (zero-copy,
-    /// instant fleet-wide); "copy" = classic per-instance merge.
+    /// "copy" = classic per-instance merge (default, same as MAA itself).
+    /// "link" = symlink <instance>/resource -> central resource. Kept only
+    /// for reference: it is incompatible with MAA's updater, which deletes
+    /// `resource` on a full-package update (see ForceRemoveDirectoryRecursive
+    /// in MaaUpdater), and a recursive delete through a junction wipes the
+    /// shared target -- a whole-fleet outage. Requires
+    /// `experimental_link_mode = true` to have any effect.
     #[serde(default = "default_resource_mode")]
     pub resource_mode: String,
+    /// Explicit opt-in for link mode. Off by default; link mode stays dead
+    /// even when resource_mode says "link" unless this is true.
+    #[serde(default)]
+    pub experimental_link_mode: bool,
     #[serde(default = "default_api_bases")]
     pub maa_api_bases: Vec<String>,
     /// e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080". Empty = direct.
@@ -107,6 +116,7 @@ impl Default for Config {
             resource_repo: default_resource_repo(),
             resource_branch: default_branch(),
             resource_mode: default_resource_mode(),
+            experimental_link_mode: false,
             maa_api_bases: default_api_bases(),
             proxy: String::new(),
             commit_on_startup: true,
