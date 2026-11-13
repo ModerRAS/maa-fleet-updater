@@ -378,15 +378,77 @@ struct InstanceLogQuery {
     tail: Option<usize>,
 }
 
-/// Diagnostic files we are willing to read inside an instance. Whitelisted
-/// by exact relative path so this endpoint can never become an arbitrary
-/// file reader, and the dir must match a discovered instance.
-const INSTANCE_LOG_FILES: [&str; 4] = [
-    "debug/pending-update-applier.log",
-    "debug/maa.log",
-    "pending-update-failure.txt",
-    "pending-update-success.txt",
-];
+/// Only read-only diagnostics are exposed: anything under <instance>/debug
+/// (MAA's gui.log / asst.log / updater log) plus the two pending-update
+/// flag files at the root. Never an arbitrary file reader.
+fn allowed_instance_file(rel: &str) -> bool {
+    let norm = rel.replace('\\', "/");
+    if norm.is_empty() || norm.starts_with('/') || norm.contains(":") {
+        return false;
+    }
+    if norm.split('/').any(|c| c == ".." || c.is_empty()) {
+        return false;
+    }
+    norm.starts_with("debug/")
+        || norm == "pending-update-failure.txt"
+        || norm == "pending-update-success.txt"
+}
+
+#[derive(serde::Deserialize)]
+struct InstanceFilesQuery {
+    dir: String,
+}
+
+/// GET /api/instance-files?dir=<instance> -> root entry names + debug entry names.
+/// Lets a caller discover which log files actually exist instead of guessing.
+async fn instance_files(
+    State(state): State<AppState>,
+    Query(q): Query<InstanceFilesQuery>,
+) -> impl IntoResponse {
+    let cfg = state.inner.cfg.read().await.clone();
+    let want_dir = q.dir.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let instances = discover::scan(&cfg);
+        let target = instances.iter().find(|i| {
+            let a = std::fs::canonicalize(&i.dir).unwrap_or_else(|_| i.dir.clone());
+            let b = std::fs::canonicalize(&want_dir).unwrap_or_else(|_| PathBuf::from(&want_dir));
+            a == b
+        });
+        let inst = match target {
+            Some(i) => i,
+            None => return Err("dir is not a discovered instance".to_string()),
+        };
+        let names = |p: PathBuf| -> Vec<String> {
+            std::fs::read_dir(p)
+                .map(|rd| {
+                    let mut v: Vec<String> = rd
+                        .filter_map(|e| e.ok())
+                        .map(|e| {
+                            let n = e.file_name().to_string_lossy().to_string();
+                            if e.path().is_dir() {
+                                format!("{n}/")
+                            } else {
+                                n
+                            }
+                        })
+                        .collect();
+                    v.sort();
+                    v
+                })
+                .unwrap_or_default()
+        };
+        Ok::<serde_json::Value, String>(serde_json::json!({
+            "root": names(inst.dir.clone()),
+            "debug": names(inst.dir.join("debug")),
+        }))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("task failed: {e}")));
+    match out {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
+}
 
 /// GET /api/instance-logs?dir=<instance>&file=debug/pending-update-applier.log&tail=200
 /// MAA and its updater keep the only record of why an app update was
@@ -399,8 +461,8 @@ async fn instance_logs(
     let want_file = q
         .file
         .clone()
-        .unwrap_or_else(|| INSTANCE_LOG_FILES[0].to_string());
-    if !INSTANCE_LOG_FILES.contains(&want_file.as_str()) {
+        .unwrap_or_else(|| "debug/gui.log".to_string());
+    if !allowed_instance_file(&want_file) {
         return (
             StatusCode::BAD_REQUEST,
             format!("file not allowed: {want_file}"),
@@ -1181,6 +1243,7 @@ async fn main() {
         .route("/api/self-update/apply", post(self_update_apply))
         .route("/api/logs", get(logs))
         .route("/api/instance-logs", get(instance_logs))
+        .route("/api/instance-files", get(instance_files))
         .route("/api/logs/download", get(logs_download))
         .route("/events", get(events))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
