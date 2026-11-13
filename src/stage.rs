@@ -522,6 +522,8 @@ mod tests {
             resource_time: Some("2020-01-01 00:00:00.000".to_string()),
             running: false,
             pending_package: None,
+            pending_name_raw: None,
+            pending_package_raw: None,
             updater_present: true,
             update_failure: None,
             extract_leftover: false,

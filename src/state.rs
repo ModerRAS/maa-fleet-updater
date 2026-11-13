@@ -25,6 +25,14 @@ pub struct InstanceInfo {
     pub extract_leftover: bool,
     #[serde(default)]
     pub update_success: bool,
+    /// Raw Update.Name / UpdatePackage from the instance config, regardless
+    /// of whether the package file exists. MAA clears these itself when it
+    /// consumes or rejects a pending package, so an empty pair right after a
+    /// commit means MAA handled it (and possibly dropped it silently).
+    #[serde(default)]
+    pub pending_name_raw: Option<String>,
+    #[serde(default)]
+    pub pending_package_raw: Option<String>,
     /// resource/ is a symlink/junction (link mode) rather than a real dir.
     /// Surfaced because MAA's full-package updater deletes root-level
     /// entries: a linked resource dir is destroyed by it, which is exactly
