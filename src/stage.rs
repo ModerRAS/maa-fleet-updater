@@ -100,11 +100,53 @@ fn commit_one(
         emit(tx, "warn", format!("{}: {}", inst.dir.display(), rep.note));
         return rep;
     }
+    // An app update replaces the whole installation root: MAA.Updater wipes
+    // top-level entries (resource/ included) and rewrites the package over
+    // them. If resource/ were a link, that wipe destroys the shared target
+    // and every linked instance at once -- exactly the outage this guard
+    // exists to prevent. So: app update wins, resource stays a real dir.
+    let app_pending = plan
+        .items
+        .iter()
+        .find(|i| i.dir == inst.dir)
+        .map(|i| i.kind == "ota" || i.kind == "full")
+        .unwrap_or(false);
+    let link_wanted = cfg.resource_mode == "link" && !app_pending;
+    if app_pending && crate::resource::is_link(&inst.dir.join("resource")) {
+        match crate::resource::unlink_restore(&inst.dir) {
+            Ok(how) => {
+                rep.note
+                    .push_str(&format!("resource {how} (unlinked before app update); "));
+                emit(
+                    tx,
+                    "warn",
+                    format!(
+                        "{}: 卸载 resource 链接后再装应用包（完整包会删根目录条目）",
+                        inst.dir.display()
+                    ),
+                );
+            }
+            Err(e) => {
+                rep.ok = false;
+                rep.note.push_str(&format!("resource unlink failed: {e}; "));
+                emit(
+                    tx,
+                    "error",
+                    format!(
+                        "{}: 有应用更新但 resource 仍是链接且卸载失败，跳过本次更新: {e}",
+                        inst.dir.display()
+                    ),
+                );
+            }
+        }
+    }
+    if !rep.ok {
+        return rep;
+    }
     if let Some(ct) = central_time {
-        let stale_link =
-            cfg.resource_mode == "link" && !crate::resource::is_linked_to(central_res, &inst.dir);
+        let stale_link = link_wanted && !crate::resource::is_linked_to(central_res, &inst.dir);
         if older(inst.resource_time.as_deref(), ct) || stale_link {
-            if cfg.resource_mode == "link" {
+            if link_wanted {
                 match crate::resource::link_into(central_res, &inst.dir) {
                     Ok(how) => {
                         rep.note.push_str(&format!("resource {how}; "));
@@ -421,6 +463,129 @@ mod tests {
             w.finish().unwrap();
         }
         buf
+    }
+
+    fn tmp_root(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "maa-fleet-ut-commit-{}-{tag}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        p
+    }
+
+    fn mk_central(root: &Path, stamp: &str) -> PathBuf {
+        let central = root.join("staging").join("MaaResource").join("resource");
+        std::fs::create_dir_all(central.join("tasks")).unwrap();
+        std::fs::write(
+            central.join("version.json"),
+            format!("{{\"last_updated\":\"{stamp}\"}}"),
+        )
+        .unwrap();
+        std::fs::write(central.join("tasks").join("a.json"), "{}").unwrap();
+        central
+    }
+
+    fn mk_instance(root: &Path, exe_bytes: &[u8]) -> PathBuf {
+        let inst = root.join("inst");
+        std::fs::create_dir_all(inst.join("resource")).unwrap();
+        std::fs::create_dir_all(inst.join("config")).unwrap();
+        std::fs::write(inst.join("MAA.exe"), exe_bytes).unwrap();
+        std::fs::write(
+            inst.join("resource").join("version.json"),
+            r#"{"last_updated":"2020-01-01 00:00:00.000"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            inst.join("config").join("gui.new.json"),
+            r#"{"Update":{"Name":"","UpdatePackage":""}}"#,
+        )
+        .unwrap();
+        inst
+    }
+
+    fn info_for(dir: &Path) -> InstanceInfo {
+        InstanceInfo {
+            dir: dir.to_path_buf(),
+            exe_version_raw: "v6.13.0".to_string(),
+            version_norm: Some("6.13.0".to_string()),
+            channel: "stable".to_string(),
+            resource_time: Some("2020-01-01 00:00:00.000".to_string()),
+            running: false,
+            pending_package: None,
+            updater_present: true,
+            update_failure: None,
+            extract_leftover: false,
+            update_success: false,
+            resource_is_link: false,
+        }
+    }
+
+    /// The exact outage: a linked instance that then receives a full app
+    /// package. MAA's updater wipes root-level entries, so the link must be
+    /// dropped (real dir restored) before staging the package.
+    #[test]
+    fn app_update_unlinks_resource_before_staging() {
+        let root = tmp_root("unlink");
+        let central = mk_central(&root, "2026-01-01 00:00:00.000");
+        let inst_dir = mk_instance(&root, b"old");
+        assert_eq!(
+            crate::resource::link_into(&central, &inst_dir).unwrap(),
+            "linked"
+        );
+        assert!(crate::resource::is_link(&inst_dir.join("resource")));
+        // Package the instance is supposed to install.
+        let dl = root.join("staging").join("downloads");
+        std::fs::create_dir_all(&dl).unwrap();
+        std::fs::write(dl.join("pkg.zip"), make_valid_zip()).unwrap();
+        let cfg = Config {
+            search_roots: vec![root.clone()],
+            staging_dir: root.join("staging"),
+            resource_mode: "link".to_string(),
+            takeover_autostart: false,
+            ..Default::default()
+        };
+        let plan = Plan {
+            items: vec![PlanItem {
+                dir: inst_dir.clone(),
+                cur_raw: "v6.13.0".to_string(),
+                latest: "v6.22.0".to_string(),
+                channel: "stable".to_string(),
+                kind: "full".to_string(),
+                file_name: "pkg.zip".to_string(),
+                urls: vec![],
+                downloaded: true,
+            }],
+            resource_time: Some("2026-01-01 00:00:00.000".to_string()),
+        };
+        let (tx, _rx) = broadcast::channel(64);
+        let rep = commit_one(
+            &cfg,
+            &plan,
+            &info_for(&inst_dir),
+            &central,
+            Some("2026-01-01 00:00:00.000"),
+            &tx,
+        );
+        assert!(rep.ok, "commit failed: {}", rep.note);
+        assert!(
+            rep.note.contains("unlinked before app update"),
+            "guard did not fire: {}",
+            rep.note
+        );
+        assert!(
+            !crate::resource::is_link(&inst_dir.join("resource")),
+            "resource still a link before app update"
+        );
+        assert!(inst_dir.join("resource").join("version.json").is_file());
+        assert_eq!(rep.app.as_deref(), Some("pkg.zip"));
+        // The shared target survived untouched.
+        assert!(central.join("version.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

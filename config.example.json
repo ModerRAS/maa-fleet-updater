@@ -4,7 +4,7 @@
   "staging_dir": "./staging",
   "resource_repo": "https://github.com/MaaAssistantArknights/MaaResource",
   "resource_branch": "main",
-  "resource_mode": "link",
+  "resource_mode": "copy",
   "maa_api_bases": [
     "https://api.maa.plus/MaaAssistantArknights/api/",
     "https://api2.maa.plus/MaaAssistantArknights/api/"

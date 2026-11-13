@@ -77,8 +77,8 @@ label{display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0}
 <div class="row"><label>中转目录 <input id="f_staging" class="wide" type="text" oninput="dirty()" /></label></div>
 <div class="row"><label>资源仓库 <input id="f_repo" class="wide" type="text" oninput="dirty()" /></label>
 <label>分支 <input id="f_branch" type="text" size="10" oninput="dirty()" /></label></div>
-<div class="row"><label>资源同步方式 <select id="f_mode" onchange="dirty()"><option value="link">link（符号链接，零拷贝）</option><option value="copy">copy（逐实例复制）</option></select></label>
-<span class="note">link 把各实例 resource/ 指向中央仓库，git pull 一次全场生效；切回 copy 会自动恢复备份</span></div>
+<div class="row"><label>资源同步方式 <select id="f_mode" onchange="dirty()"><option value="copy">copy（逐实例复制，默认）</option><option value="link">link（符号链接，实验性：更新器会删 resource 目录）</option></select></label>
+<span class="note">copy 给各实例复制中央仓库（和 MAA 自己更新一致）；link 为零拷贝实验选项，切回 copy 会自动恢复备份</span></div>
 <div class="row"><label>代理（空=直连，GitHub 与 git 共用） <input id="f_proxy" class="wide" type="text" placeholder="http://127.0.0.1:7890" oninput="dirty()" /></label></div>
 <div class="row"><label>API 基地址列表</label></div>
 <div id="apis"></div>
@@ -190,6 +190,7 @@ function renderInstances(){
 }
 function diag(i){
   var s = "";
+  if(i.resource_is_link){ s += " 资源=链接"; }
   if(i.updater_present === false){ s += " 缺Updater"; }
   if(i.update_failure){ s += " 上次失败:" + String(i.update_failure).slice(0, 80); }
   if(i.extract_leftover){ s += " 有残留解包目录"; }
@@ -268,7 +269,7 @@ function loadConfig(btn){ withBtn(btn, async function(){
   document.getElementById("f_staging").value = CFG.staging_dir;
   document.getElementById("f_repo").value = CFG.resource_repo;
   document.getElementById("f_branch").value = CFG.resource_branch;
-  document.getElementById("f_mode").value = CFG.resource_mode || "link";
+  document.getElementById("f_mode").value = CFG.resource_mode || "copy";
   document.getElementById("f_proxy").value = CFG.proxy;
   document.getElementById("f_bind").value = CFG.web_bind;
   document.getElementById("f_token").value = CFG.auth_token;

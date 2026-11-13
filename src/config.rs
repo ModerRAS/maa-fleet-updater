@@ -16,8 +16,13 @@ fn default_resource_repo() -> String {
 fn default_branch() -> String {
     "main".to_string()
 }
+// Copy is the default: each instance keeps a real resource dir, exactly
+// like MAA itself maintains it. Link mode shares one central dir across the
+// fleet, but MAA.Updater treats resource/ as its own scratch space during
+// full updates (root-level delete/replace), which can destroy the shared
+// target and break every linked instance at once. Keep link opt-in only.
 fn default_resource_mode() -> String {
-    "link".to_string()
+    "copy".to_string()
 }
 fn default_api_bases() -> Vec<String> {
     vec![

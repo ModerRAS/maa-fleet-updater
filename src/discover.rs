@@ -101,6 +101,7 @@ fn inspect(dir: &Path, sys: &System) -> InstanceInfo {
             .filter(|t| !t.is_empty()),
         extract_leftover: dir.join("NewVersionExtract").is_dir(),
         update_success: dir.join("pending-update-success.txt").is_file(),
+        resource_is_link: crate::resource::is_link(&dir.join("resource")),
     }
 }
 

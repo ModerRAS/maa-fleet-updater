@@ -25,6 +25,13 @@ pub struct InstanceInfo {
     pub extract_leftover: bool,
     #[serde(default)]
     pub update_success: bool,
+    /// resource/ is a symlink/junction (link mode) rather than a real dir.
+    /// Surfaced because MAA's full-package updater deletes root-level
+    /// entries: a linked resource dir is destroyed by it, which is exactly
+    /// how a fleet-wide outage happened once. Never let an instance carry a
+    /// link into an app update.
+    #[serde(default)]
+    pub resource_is_link: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
