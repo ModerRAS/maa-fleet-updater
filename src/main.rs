@@ -449,14 +449,47 @@ async fn task_probe(
                 }
             }
         }
-        // Config references (task chains live in gui.new.json).
+        // Config references (task chains live in gui.new.json). Parse the
+        // structure so an entry's enabled state is visible: a disabled entry
+        // never reaches the chain, so it cannot trigger the error.
         let mut config_hits: Vec<String> = Vec::new();
         if let Ok(t) = std::fs::read_to_string(inst.dir.join("config").join("gui.new.json")) {
-            for line in t.lines() {
-                if line.contains(&name) {
-                    let s = line.trim();
-                    config_hits.push(s.chars().take(240).collect());
+            let text = crate::discover::strip_bom(&t);
+            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) {
+                fn walk(v: &serde_json::Value, name: &str, out: &mut Vec<String>) {
+                    match v {
+                        serde_json::Value::Object(m) => {
+                            let hit = m
+                                .get("CustomTaskName")
+                                .and_then(|x| x.as_str())
+                                .map(|x| x == name)
+                                .unwrap_or(false);
+                            if hit {
+                                let enabled = m
+                                    .get("IsEnable")
+                                    .map(|x| x.to_string())
+                                    .unwrap_or_else(|| "?".to_string());
+                                let task_type = m
+                                    .get("TaskType")
+                                    .map(|x| x.to_string())
+                                    .unwrap_or_else(|| "?".to_string());
+                                out.push(format!("IsEnable={enabled} TaskType={task_type}"));
+                            }
+                            for x in m.values() {
+                                walk(x, name, out);
+                            }
+                        }
+                        serde_json::Value::Array(a) => {
+                            for x in a {
+                                walk(x, name, out);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
+                walk(&doc, &name, &mut config_hits);
+            } else {
+                config_hits.push("config parse failed".to_string());
             }
         }
         let version = crate::resource::read_last_updated(&res);
