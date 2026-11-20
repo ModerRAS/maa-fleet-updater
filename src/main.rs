@@ -395,6 +395,88 @@ fn allowed_instance_file(rel: &str) -> bool {
 }
 
 #[derive(serde::Deserialize)]
+struct TaskProbeQuery {
+    dir: String,
+    name: String,
+}
+
+/// GET /api/task-probe?dir=<instance>&name=GreenTicket@Store@Begin
+/// Answers "does this task exist in this instance's resource, and does the
+/// config reference it?" by scanning the resource task files and the config
+/// for the literal name. Read-only, bounded output.
+async fn task_probe(
+    State(state): State<AppState>,
+    Query(q): Query<TaskProbeQuery>,
+) -> impl IntoResponse {
+    let cfg = state.inner.cfg.read().await.clone();
+    let want_dir = q.dir.clone();
+    let name = q.name.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let instances = discover::scan(&cfg);
+        let target = instances.iter().find(|i| {
+            let a = std::fs::canonicalize(&i.dir).unwrap_or_else(|_| i.dir.clone());
+            let b = std::fs::canonicalize(&want_dir).unwrap_or_else(|_| PathBuf::from(&want_dir));
+            a == b
+        });
+        let inst = match target {
+            Some(i) => i,
+            None => return Err("dir is not a discovered instance".to_string()),
+        };
+        let needle = format!("\"{name}\"");
+        let mut found_in: Vec<String> = Vec::new();
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        let res = inst.dir.join("resource");
+        candidates.push(res.join("tasks").join("tasks.json"));
+        if let Ok(rd) = std::fs::read_dir(res.join("tasks").join("hotfix")) {
+            for e in rd.filter_map(|e| e.ok()) {
+                if e.path().extension().and_then(|x| x.to_str()) == Some("json") {
+                    candidates.push(e.path());
+                }
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(res.join("global")) {
+            for e in rd.filter_map(|e| e.ok()) {
+                let p = e.path().join("resource").join("tasks").join("tasks.json");
+                if p.is_file() {
+                    candidates.push(p);
+                }
+            }
+        }
+        for p in candidates {
+            if let Ok(t) = std::fs::read_to_string(&p) {
+                if t.contains(&needle) {
+                    found_in.push(p.to_string_lossy().to_string());
+                }
+            }
+        }
+        // Config references (task chains live in gui.new.json).
+        let mut config_hits: Vec<String> = Vec::new();
+        if let Ok(t) = std::fs::read_to_string(inst.dir.join("config").join("gui.new.json")) {
+            for line in t.lines() {
+                if line.contains(&name) {
+                    let s = line.trim();
+                    config_hits.push(s.chars().take(240).collect());
+                }
+            }
+        }
+        let version = crate::resource::read_last_updated(&res);
+        Ok::<serde_json::Value, String>(serde_json::json!({
+            "instance": inst.dir.to_string_lossy(),
+            "name": name,
+            "found_in": found_in,
+            "config_hits": config_hits,
+            "resource_version": version,
+        }))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("task failed: {e}")));
+    match out {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct InstanceFilesQuery {
     dir: String,
 }
@@ -1248,6 +1330,7 @@ async fn main() {
         .route("/api/logs", get(logs))
         .route("/api/instance-logs", get(instance_logs))
         .route("/api/instance-files", get(instance_files))
+        .route("/api/task-probe", get(task_probe))
         .route("/api/logs/download", get(logs_download))
         .route("/events", get(events))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
