@@ -196,7 +196,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let mut p = std::env::temp_dir();
+        let mut p = crate::fsutil::test_tmp_base();
         p.push(format!(
             "maa-fleet-ut-{}-{}-{ms}-{n}",
             std::process::id(),

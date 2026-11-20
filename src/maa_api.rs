@@ -52,6 +52,9 @@ pub async fn check(
     cur_raw: &str,
     cur: &semver::Version,
     arch_arm: bool,
+    // true = also resolve assets when already up to date, so a repair
+    // reinstall (same version, clean files) can be staged.
+    force_assets: bool,
 ) -> Result<CheckRes, String> {
     let mut summary_err = String::new();
     let (summary, base) = {
@@ -80,7 +83,7 @@ pub async fn check(
         return Err(format!("channel {channel} missing in summary"));
     }
     let latest = norm(&latest_raw).ok_or_else(|| format!("bad latest version {latest_raw}"))?;
-    if latest <= *cur {
+    if latest <= *cur && !force_assets {
         return Ok(CheckRes::UpToDate);
     }
     let detail_url = entry

@@ -641,6 +641,10 @@ async fn run_prepare(state: &AppState, force_full: bool) {
             &cur_raw,
             &cur_v,
             arch_arm,
+            // Repair reinstall: resolve the full package even when the
+            // version already matches, so a broken resource can be replaced
+            // by the one bundled in the package.
+            force_full,
         )
         .await
         {

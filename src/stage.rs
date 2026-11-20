@@ -190,16 +190,27 @@ fn commit_one(
             } else {
                 // Leaving link mode: a link must never be merged through
                 // (the writes would land in the central repo). Restore first.
+                let mut restored = false;
                 if crate::resource::is_link(&inst.dir.join("resource")) {
                     match crate::resource::unlink_restore(&inst.dir) {
-                        Ok(how) => rep.note.push_str(&format!("resource {how}; ")),
+                        Ok(how) => {
+                            rep.note.push_str(&format!("resource {how}; "));
+                            restored = true;
+                        }
                         Err(e) => {
                             rep.ok = false;
                             rep.note.push_str(&format!("resource unlink failed: {e}; "));
                         }
                     }
                 }
-                if rep.ok {
+                // MAA owns its resources: it knows which one matches the
+                // client, and copying the newest central checkout onto a
+                // client that does not match it breaks every task. Only sync
+                // when explicitly enabled, or when a link just got restored
+                // (that backup is guaranteed stale).
+                if rep.ok && !cfg.resource_sync && !restored {
+                    rep.note.push_str("resource sync off (MAA manages it); ");
+                } else if rep.ok {
                     match crate::resource::merge_into(central_res, &inst.dir, tx) {
                         Ok(n) => {
                             rep.resource_files = n;
@@ -457,7 +468,7 @@ mod tests {
     use super::*;
 
     fn tmp_zip(name: &str, bytes: &[u8]) -> PathBuf {
-        let mut p = std::env::temp_dir();
+        let mut p = crate::fsutil::test_tmp_base();
         p.push(format!(
             "maa-fleet-ut-zip-{}-{}-{name}",
             std::process::id(),
@@ -484,7 +495,7 @@ mod tests {
     }
 
     fn tmp_root(tag: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
+        let mut p = crate::fsutil::test_tmp_base();
         p.push(format!(
             "maa-fleet-ut-commit-{}-{tag}-{}",
             std::process::id(),
@@ -605,6 +616,42 @@ mod tests {
         assert_eq!(rep.app.as_deref(), Some("pkg.zip"));
         // The shared target survived untouched.
         assert!(central.join("version.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Default config must NOT push the central resource into instances:
+    /// the newest checkout does not necessarily match the client, and a
+    /// mismatch makes every MAA task fail (undefined task / broken resource).
+    #[test]
+    fn resource_sync_is_off_by_default() {
+        let root = tmp_root("nosync");
+        let stamp = "2026-01-01 00:00:00.000";
+        let central = mk_central(&root, stamp);
+        let inst_dir = mk_instance(&root, b"exe");
+        let before =
+            std::fs::read_to_string(inst_dir.join("resource").join("version.json")).unwrap();
+        let cfg = Config {
+            search_roots: vec![root.clone()],
+            staging_dir: root.join("staging"),
+            takeover_autostart: false,
+            ..Default::default()
+        };
+        assert!(!cfg.resource_sync, "resource_sync must default to false");
+        let plan = Plan::default();
+        let (tx, _rx) = broadcast::channel(64);
+        let rep = commit_one(
+            &cfg,
+            &plan,
+            &info_for(&inst_dir),
+            &central,
+            Some(stamp),
+            &tx,
+        );
+        assert!(rep.ok, "commit failed: {}", rep.note);
+        let after =
+            std::fs::read_to_string(inst_dir.join("resource").join("version.json")).unwrap();
+        assert_eq!(before, after, "resource was modified with sync off");
+        assert_eq!(rep.resource_files, 0);
         let _ = std::fs::remove_dir_all(&root);
     }
 

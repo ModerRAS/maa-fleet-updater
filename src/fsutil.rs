@@ -2,6 +2,18 @@
 //! `create_dir_all` on an empty path surfaces as OS EINVAL ("invalid argument");
 //! refuse early with a message that points at the misconfigured setting.
 
+/// Base directory for unit-test scratch data. Deliberately NOT the system
+/// temp dir: it may live on a RAM disk (R:\Temp), where creating junctions
+/// fails, which would make symlink tests fail for the wrong reason.
+#[cfg(test)]
+pub fn test_tmp_base() -> std::path::PathBuf {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("ut-tmp");
+    let _ = std::fs::create_dir_all(&base);
+    base
+}
+
 pub fn ensure_parent(path: &std::path::Path, what: &str) -> Result<(), String> {
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => {

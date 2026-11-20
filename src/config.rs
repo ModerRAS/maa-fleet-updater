@@ -77,6 +77,12 @@ pub struct Config {
     /// even when resource_mode says "link" unless this is true.
     #[serde(default)]
     pub experimental_link_mode: bool,
+    /// Push the central MaaResource checkout into instances. OFF by default:
+    /// MAA's resource must match the program version, and blindly copying the
+    /// newest resource onto an older client makes every task fail with
+    /// "undefined task / resource broken". MAA manages its own resources.
+    #[serde(default)]
+    pub resource_sync: bool,
     #[serde(default = "default_api_bases")]
     pub maa_api_bases: Vec<String>,
     /// e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080". Empty = direct.
@@ -117,6 +123,7 @@ impl Default for Config {
             resource_branch: default_branch(),
             resource_mode: default_resource_mode(),
             experimental_link_mode: false,
+            resource_sync: false,
             maa_api_bases: default_api_bases(),
             proxy: String::new(),
             commit_on_startup: true,
